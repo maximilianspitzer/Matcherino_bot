@@ -21,8 +21,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY . .
 
 # Fix line endings and ensure the entrypoint script is executable
-RUN sed -i 's/\r$//' docker-entrypoint.sh && \
-    chmod +x docker-entrypoint.sh
+RUN sed -i 's/\r$//' entrypoint.sh && \
+    chmod +x entrypoint.sh
 
 # Create a persistent cache directory (this is mapped on Unraid)
 RUN mkdir -p /app/cache && chmod 777 /app/cache
@@ -32,4 +32,4 @@ RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
 
 # Use an absolute path for the entrypoint
-ENTRYPOINT ["/app/docker-entrypoint.sh"]
+ENTRYPOINT ["/app/entrypoint.sh"]
