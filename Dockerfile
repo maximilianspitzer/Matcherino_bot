@@ -18,9 +18,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Copy entrypoint script
+# Copy entrypoint script and make it executable with explicit permissions
 COPY docker-entrypoint.sh .
-RUN chmod +x /app/docker-entrypoint.sh
+RUN chmod 755 /app/docker-entrypoint.sh
 
 # Copy application code
 COPY . .
@@ -28,5 +28,5 @@ COPY . .
 # Create cache directory with proper permissions
 RUN mkdir -p /app/cache && chmod 777 /app/cache
 
-# Use the entrypoint script
-ENTRYPOINT ["/app/docker-entrypoint.sh"] 
+# Use the entrypoint script with shell form instead of exec form
+ENTRYPOINT ["/bin/bash", "/app/docker-entrypoint.sh"] 
