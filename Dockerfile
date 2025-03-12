@@ -1,15 +1,15 @@
 FROM python:3.10-slim
 
 # Set up environment
-ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Set working directory
 WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc \
+    && apt-get install -y --no-install-recommends gcc postgresql-client \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -18,7 +18,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Copy entrypoint script and make it executable with explicit permissions
+# Copy entrypoint script and fix line endings
 COPY docker-entrypoint.sh .
 RUN sed -i 's/\r$//' docker-entrypoint.sh && \
     chmod +x docker-entrypoint.sh
@@ -29,5 +29,9 @@ COPY . .
 # Create cache directory with proper permissions
 RUN mkdir -p /app/cache && chmod 777 /app/cache
 
-# Use the entrypoint script with shell form instead of exec form
-ENTRYPOINT ["/bin/bash", "/app/docker-entrypoint.sh"] 
+# Create a non-root user and set proper ownership
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+# Use the entrypoint script directly
+ENTRYPOINT ["./docker-entrypoint.sh"] 
