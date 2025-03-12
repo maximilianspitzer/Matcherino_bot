@@ -116,8 +116,21 @@ See the [Unraid Deployment Guide](UNRAID.md) for detailed instructions.
 - `sync_teams.py` - Team synchronization logic
 - Docker and deployment configuration files
 
-### Container Registry
-This project uses GitHub Container Registry (ghcr.io) to publish container images. When you push to the repository with the appropriate GitHub Actions workflow, the container image is automatically built and published.
+### GitHub Actions Workflow
+
+This project includes a GitHub Actions workflow that automatically:
+
+1. Builds the Docker image when you push changes
+2. Publishes the image to GitHub Container Registry
+3. Optionally deploys to your Unraid server (when configured)
+
+To enable automatic deployment to Unraid:
+1. Generate an SSH key pair
+2. Add the public key to your Unraid server
+3. Add the private key and other required secrets to your GitHub repository
+4. Set the `UNRAID_DEPLOY` variable to `true` in repository variables
+
+For detailed setup instructions, see the [Unraid Deployment Guide](UNRAID.md).
 
 ### Contributing
 1. Fork the repository

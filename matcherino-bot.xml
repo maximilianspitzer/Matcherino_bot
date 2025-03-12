@@ -1,25 +1,17 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>matcherino-bot</Name>
-  <Repository>ghcr.io/yourusername/matcherino-bot:latest</Repository>
-  <Registry>https://ghcr.io/</Registry>
+  <Repository>ghcr.io/GITHUB_USERNAME/matcherino-bot:latest</Repository>
+  <Registry>ghcr.io</Registry>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
-  <Support>https://github.com/yourusername/matcherino-bot</Support>
-  <Project>https://github.com/yourusername/matcherino-bot</Project>
-  <Overview>Discord bot for Matcherino tournament management</Overview>
-  <Category>Tools: Network:Other</Category>
-  <WebUI></WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/yourusername/matcherino-bot/main/matcherino-bot.xml</TemplateURL>
+  <Support>https://github.com/GITHUB_USERNAME/matcherino-bot</Support>
+  <Project>https://github.com/GITHUB_USERNAME/matcherino-bot</Project>
+  <Overview>Discord bot for Matcherino tournament registration and management</Overview>
+  <Category>Tools: Other</Category>
   <Icon>https://discord.com/assets/f8389ca1a741a115313bede9ac02e2c0.svg</Icon>
-  <ExtraParams/>
-  <PostArgs/>
-  <CPUset/>
-  <DateInstalled>1683752231</DateInstalled>
-  <DonateText/>
-  <DonateLink/>
   <Config Name="BOT_TOKEN" Target="BOT_TOKEN" Default="" Mode="" Description="Your Discord bot token" Type="Variable" Display="always" Required="true" Mask="true"/>
-  <Config Name="DATABASE_URL" Target="DATABASE_URL" Default="postgresql://postgres:POSTGRES_PASSWORD@db/matcherino" Mode="" Description="Database connection string (modify only if using external DB)" Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="POSTGRES_PASSWORD" Target="POSTGRES_PASSWORD" Default="choose_a_secure_password" Mode="" Description="Password for the PostgreSQL database" Type="Variable" Display="always" Required="true" Mask="true"/>
   <Config Name="MATCHERINO_TOURNAMENT_ID" Target="MATCHERINO_TOURNAMENT_ID" Default="144716" Mode="" Description="Your Matcherino tournament ID" Type="Variable" Display="always" Required="true" Mask="false"/>
-  <Config Name="Cache" Target="/app/cache" Default="/mnt/user/appdata/matcherino-bot/cache" Mode="rw" Description="Cache directory" Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="App Data" Target="/app/cache" Default="/mnt/user/appdata/matcherino-bot/cache" Mode="rw" Description="Cache directory" Type="Path" Display="advanced" Required="false" Mask="false"/>
 </Container> 

@@ -65,23 +65,28 @@ For automatic deployment whenever you push to your GitHub repository.
    cat ~/.ssh/id_ed25519.pub
    
    # On the Unraid server
+   mkdir -p ~/.ssh
    nano ~/.ssh/authorized_keys
    # Paste the public key on a new line
+   chmod 600 ~/.ssh/authorized_keys
    ```
 
-3. **Add the private key and other secrets to GitHub**:
+3. **Add secrets to GitHub**:
    - Go to your GitHub repository → Settings → Secrets and variables → Actions
    - Add the following secrets:
-     - `SSH_PRIVATE_KEY`: The contents of your `~/.ssh/id_ed25519` file
+     - `SSH_KEY`: The contents of your `~/.ssh/id_ed25519` private key file
      - `UNRAID_HOST`: Your Unraid server IP or hostname
      - `UNRAID_USER`: The user to connect to your Unraid server (usually 'root')
      - `BOT_TOKEN`: Your Discord bot token
      - `POSTGRES_PASSWORD`: A secure password for PostgreSQL
      - `MATCHERINO_TOURNAMENT_ID`: Your Matcherino tournament ID
 
-4. **The workflow files are already in the repository**:
-   - `.github/workflows/build-publish.yml` - Builds and publishes the container to GitHub Container Registry
-   - `.github/workflows/deploy.yml` - Deploys to your Unraid server
+4. **Enable deployment**:
+   - Go to your GitHub repository → Settings → Secrets and variables → Actions
+   - Select the "Variables" tab
+   - Add a new variable:
+     - Name: `UNRAID_DEPLOY`
+     - Value: `true`
 
 5. **Trigger deployment by pushing to your repository**:
    ```bash
@@ -90,9 +95,9 @@ For automatic deployment whenever you push to your GitHub repository.
    git push origin main
    ```
 
-6. **Monitor the GitHub Actions workflows**:
+6. **Monitor the GitHub Actions workflow**:
    - Go to your repository on GitHub → Actions tab
-   - You should see your workflows running
+   - You should see your workflow running
 
 ## Method 3: Using GitHub Container Registry
 
@@ -158,6 +163,12 @@ The most Unraid-friendly method using the built-in Community Applications.
 - Ensure your container image is public, or you've authenticated with GitHub credentials
 - If using a private repository, you need a Personal Access Token with `read:packages` scope
 - Check if you can pull the image manually: `docker pull ghcr.io/yourusername/matcherino-bot:latest`
+
+### GitHub Actions Deployment Issues
+- Check that all required secrets are set up correctly
+- Ensure the SSH key has proper permissions on your Unraid server
+- Verify the `UNRAID_DEPLOY` variable is set to `true`
+- Check the GitHub Actions logs for detailed error messages
 
 ### Database Connection Issues
 - Check that the PostgreSQL container is running: `docker ps`
