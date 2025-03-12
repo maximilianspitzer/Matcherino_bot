@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# Only install dependencies if the marker file doesn't exist
-if [ ! -f /app/.dependencies_installed ]; then
+# Check if the marker file exists in the persistent volume
+if [ ! -f /app/cache/.dependencies_installed ]; then
   echo "Installing/upgrading pip and dependencies..."
   pip install --no-cache-dir --upgrade pip
   pip install --no-cache-dir -r requirements.txt
@@ -12,7 +12,7 @@ if [ ! -f /app/.dependencies_installed ]; then
     pip install --no-cache-dir $EXTRA_REQUIREMENTS
   fi
 
-  # Optionally install any other packages conditionally
+  # Optionally install any missing packages
   if ! python -c "import bs4" &>/dev/null; then
     echo "Installing beautifulsoup4..."
     pip install --no-cache-dir beautifulsoup4
@@ -25,8 +25,8 @@ if [ ! -f /app/.dependencies_installed ]; then
     fi
   done
 
-  # Create a marker file to indicate installation has been completed
-  touch /app/.dependencies_installed
+  # Create the marker file in the persistent volume
+  touch /app/cache/.dependencies_installed
 fi
 
 echo "Starting Matcherino Bot..."
