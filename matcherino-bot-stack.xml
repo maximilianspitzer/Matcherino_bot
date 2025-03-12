@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>matcherino-bot</Name>
+  <Repository>ghcr.io/GITHUB_USERNAME/matcherino-bot:latest</Repository>
+  <Registry>ghcr.io</Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/GITHUB_USERNAME/matcherino-bot</Support>
+  <Project>https://github.com/GITHUB_USERNAME/matcherino-bot</Project>
+  <Overview>Discord bot for Matcherino tournament registration and management. This container automatically creates a companion PostgreSQL database.</Overview>
+  <Category>Tools: Other</Category>
+  <Icon>https://discord.com/assets/f8389ca1a741a115313bede9ac02e2c0.svg</Icon>
+  <Extra>
+    EXTRA_REQUIREMENTS can be used to install additional Python packages at runtime.
+    Example: beautifulsoup4 requests lxml
+  </Extra>
+  <Config Name="BOT_TOKEN" Target="BOT_TOKEN" Default="" Mode="" Description="Your Discord bot token" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="POSTGRES_PASSWORD" Target="POSTGRES_PASSWORD" Default="choose_a_secure_password" Mode="" Description="Password for the PostgreSQL database" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="MATCHERINO_TOURNAMENT_ID" Target="MATCHERINO_TOURNAMENT_ID" Default="144716" Mode="" Description="Your Matcherino tournament ID" Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="EXTRA_REQUIREMENTS" Target="EXTRA_REQUIREMENTS" Default="beautifulsoup4 requests lxml" Mode="" Description="Additional Python packages to install at startup" Type="Variable" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="App Data" Target="/app/cache" Default="/mnt/user/appdata/matcherino-bot/cache" Mode="rw" Description="Cache directory" Type="Path" Display="advanced" Required="false" Mask="false"/>
+  <Config Name="Database Data" Target="/var/lib/postgresql/data" Default="/mnt/user/appdata/matcherino-bot/database" Mode="rw" Description="PostgreSQL database files" Type="Path" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="PostgreSQL Port" Target="5432" Default="5432" Mode="tcp" Description="PostgreSQL database port (optional)" Type="Port" Display="advanced" Required="false" Mask="false"/>
+  <PostArgs># Create a companion PostgreSQL container if it doesn't exist
+if ! docker ps -a --format '{{.Names}}' | grep -q "matcherino-db"; then
+  echo "Setting up PostgreSQL database container..."
+  docker run -d \
+    --name matcherino-db \
+    --restart unless-stopped \
+    --network bridge \
+    -e POSTGRES_PASSWORD="$(docker inspect --format='{{range .Config.Env}}{{println .}}{{end}}' matcherino-bot | grep POSTGRES_PASSWORD | cut -d= -f2)" \
+    -e POSTGRES_DB=matcherino \
+    -v "$(docker inspect --format='{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Source}}{{end}}{{end}}' matcherino-bot):/var/lib/postgresql/data" \
+    -p "$(docker inspect --format='{{range $p, $conf := .NetworkSettings.Ports}}{{if eq $p "5432/tcp"}}{{(index $conf 0).HostPort}}{{end}}{{end}}' matcherino-bot):5432" \
+    postgres:14-alpine
+  
+  # Update bot environment with the correct database URL
+  docker exec matcherino-bot sh -c 'echo "DATABASE_URL=postgresql://postgres:$POSTGRES_PASSWORD@matcherino-db/matcherino" >> /app/.env'
+fi</PostArgs>
+</Container> 

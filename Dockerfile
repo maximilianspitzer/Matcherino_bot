@@ -13,10 +13,14 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Copy requirements file first to leverage Docker caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
+
+# Copy entrypoint script
+COPY docker-entrypoint.sh .
+RUN chmod +x /app/docker-entrypoint.sh
 
 # Copy application code
 COPY . .
@@ -24,5 +28,5 @@ COPY . .
 # Create cache directory with proper permissions
 RUN mkdir -p /app/cache && chmod 777 /app/cache
 
-# Command to run the bot
-CMD ["python", "bot.py"] 
+# Use the entrypoint script
+ENTRYPOINT ["/app/docker-entrypoint.sh"] 
