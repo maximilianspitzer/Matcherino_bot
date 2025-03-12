@@ -19,9 +19,9 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 # Copy entrypoint script and fix line endings
-COPY docker-entrypoint.sh .
-RUN sed -i 's/\r$//' docker-entrypoint.sh && \
-    chmod +x docker-entrypoint.sh
+COPY entrypoint.sh .
+RUN sed -i 's/\r$//' entrypoint.sh && \
+    chmod +x entrypoint.sh
 
 # Copy application code
 COPY . .
@@ -34,4 +34,4 @@ RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
 
 # Use the entrypoint script directly
-ENTRYPOINT ["./docker-entrypoint.sh"] 
+ENTRYPOINT ["./entrypoint.sh"] 
