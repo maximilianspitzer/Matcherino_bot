@@ -1,36 +1,33 @@
-#!/bin/sh
+#!/bin/bash
 set -e
 
-echo "Starting Matcherino Bot..."
+# Only install dependencies if the marker file doesn't exist
+if [ ! -f /app/.dependencies_installed ]; then
+  echo "Installing/upgrading pip and dependencies..."
+  pip install --no-cache-dir --upgrade pip
+  pip install --no-cache-dir -r requirements.txt
 
-# Install or upgrade pip
-echo "Ensuring pip is up-to-date..."
-pip install --no-cache-dir --upgrade pip
-
-# Install requirements
-echo "Installing dependencies from requirements.txt..."
-pip install --no-cache-dir -r requirements.txt
-
-# If additional requirements are specified, install them too
-if [ -n "$EXTRA_REQUIREMENTS" ]; then
-  echo "Installing extra requirements: $EXTRA_REQUIREMENTS"
-  pip install --no-cache-dir $EXTRA_REQUIREMENTS
-fi
-
-# Test if beautifulsoup4 is installed (this was missing in the error)
-if ! python -c "import bs4" &>/dev/null; then
-  echo "BeautifulSoup not found, installing..."
-  pip install --no-cache-dir beautifulsoup4
-fi
-
-# Test if other commonly needed packages are installed
-for package in requests lxml; do
-  if ! python -c "import $package" &>/dev/null; then
-    echo "$package not found, installing..."
-    pip install --no-cache-dir $package
+  if [ -n "$EXTRA_REQUIREMENTS" ]; then
+    echo "Installing extra requirements: $EXTRA_REQUIREMENTS"
+    pip install --no-cache-dir $EXTRA_REQUIREMENTS
   fi
-done
 
-# Run the bot
-echo "Starting bot..."
-exec python bot.py 
+  # Optionally install any other packages conditionally
+  if ! python -c "import bs4" &>/dev/null; then
+    echo "Installing beautifulsoup4..."
+    pip install --no-cache-dir beautifulsoup4
+  fi
+
+  for package in requests lxml; do
+    if ! python -c "import $package" &>/dev/null; then
+      echo "Installing $package..."
+      pip install --no-cache-dir $package
+    fi
+  done
+
+  # Create a marker file to indicate installation has been completed
+  touch /app/.dependencies_installed
+fi
+
+echo "Starting Matcherino Bot..."
+exec python bot.py
