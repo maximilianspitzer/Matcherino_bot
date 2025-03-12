@@ -1,0 +1,79 @@
+name: Deploy to Unraid
+
+on:
+  push:
+    branches: [ main ]  # Change to your main branch name if different
+  workflow_dispatch:    # Allow manual triggering
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Set up SSH
+      uses: webfactory/ssh-agent@v0.7.0
+      with:
+        ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+        
+    - name: Add Unraid host to known hosts
+      run: |
+        mkdir -p ~/.ssh
+        ssh-keyscan -H ${{ secrets.UNRAID_HOST }} >> ~/.ssh/known_hosts
+        
+    - name: Deploy to Unraid
+      run: |
+        # Test SSH connection
+        if ! ssh -q ${{ secrets.UNRAID_USER }}@${{ secrets.UNRAID_HOST }} exit; then
+          echo "SSH connection failed. Check your credentials and server status."
+          exit 1
+        fi
+        
+        # Deploy
+        ssh ${{ secrets.UNRAID_USER }}@${{ secrets.UNRAID_HOST }} "
+          set -e  # Exit on any error
+          
+          echo 'Creating app directory...'
+          mkdir -p /mnt/user/appdata/matcherino_bot
+          cd /mnt/user/appdata/matcherino_bot
+          
+          echo 'Fetching code...'
+          if [ -d '.git' ]; then
+            git pull
+          else
+            git clone ${{ github.server_url }}/${{ github.repository }} .
+          fi
+          
+          echo 'Setting up environment...'
+          cp .env.docker .env
+          
+          # Update environment variables if they exist in secrets
+          if [ ! -z '${{ secrets.BOT_TOKEN }}' ]; then
+            sed -i 's/BOT_TOKEN=.*/BOT_TOKEN=${{ secrets.BOT_TOKEN }}/g' .env
+          fi
+          
+          if [ ! -z '${{ secrets.POSTGRES_PASSWORD }}' ]; then
+            sed -i 's/POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}/g' .env
+          fi
+          
+          if [ ! -z '${{ secrets.MATCHERINO_TOURNAMENT_ID }}' ]; then
+            sed -i 's/MATCHERINO_TOURNAMENT_ID=.*/MATCHERINO_TOURNAMENT_ID=${{ secrets.MATCHERINO_TOURNAMENT_ID }}/g' .env
+          fi
+          
+          echo 'Starting containers...'
+          docker-compose down
+          docker-compose up -d --build
+          
+          echo 'Deployment complete!'
+          
+          # Verify containers are running
+          echo 'Verifying deployment...'
+          if docker ps | grep -q matcherino-bot; then
+            echo 'Bot container is running!'
+          else
+            echo 'Bot container failed to start. Check logs.'
+            exit 1
+          fi
+        " 

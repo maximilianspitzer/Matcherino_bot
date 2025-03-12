@@ -1,0 +1,14 @@
+# Core dependencies
+discord.py==2.5.2
+asyncpg==0.30.0
+python-dotenv==1.0.1
+
+# Utility packages
+aiohttp==3.9.3
+requests==2.31.0
+
+# Date handling
+pytz==2024.1
+
+# Logging and monitoring
+structlog==24.1.0 
