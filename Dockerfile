@@ -20,8 +20,8 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 # Copy entrypoint script and make it executable with explicit permissions
 COPY docker-entrypoint.sh .
-RUN chmod 755 /app/docker-entrypoint.sh
-RUN chmod +x /app/docker-entrypoint.sh
+RUN sed -i 's/\r$//' docker-entrypoint.sh && \
+    chmod +x docker-entrypoint.sh
 
 # Copy application code
 COPY . .
