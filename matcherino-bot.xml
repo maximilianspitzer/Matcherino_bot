@@ -1,16 +1,16 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>matcherino-bot</Name>
-  <Repository>yourusername/matcherino-bot:latest</Repository>
-  <Registry>https://hub.docker.com/r/yourusername/matcherino-bot/</Registry>
+  <Repository>ghcr.io/yourusername/matcherino-bot:latest</Repository>
+  <Registry>https://ghcr.io/</Registry>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
-  <Support>https://github.com/yourusername/your-repo-name</Support>
-  <Project>https://github.com/yourusername/your-repo-name</Project>
+  <Support>https://github.com/yourusername/matcherino-bot</Support>
+  <Project>https://github.com/yourusername/matcherino-bot</Project>
   <Overview>Discord bot for Matcherino tournament management</Overview>
   <Category>Tools: Network:Other</Category>
   <WebUI></WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/yourusername/your-repo-name/main/matcherino-bot.xml</TemplateURL>
+  <TemplateURL>https://raw.githubusercontent.com/yourusername/matcherino-bot/main/matcherino-bot.xml</TemplateURL>
   <Icon>https://discord.com/assets/f8389ca1a741a115313bede9ac02e2c0.svg</Icon>
   <ExtraParams/>
   <PostArgs/>

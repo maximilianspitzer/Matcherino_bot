@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # Discord bot service
   bot:
-    image: yourusername/matcherino-bot:latest  # Replace with your Docker Hub username
+    image: ghcr.io/${GITHUB_USERNAME:-yourusername}/matcherino-bot:latest
     container_name: matcherino-bot
     restart: unless-stopped
     depends_on:

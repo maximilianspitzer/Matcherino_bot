@@ -41,6 +41,7 @@ python bot.py
 
 ### Method 2: Docker Installation
 
+#### Option A: Build Locally
 1. Clone this repository:
 ```bash
 git clone <repository-url>
@@ -52,6 +53,27 @@ cd matcherino-bot
 3. Build and run with Docker Compose:
 ```bash
 docker-compose up -d
+```
+
+#### Option B: Use Pre-built Container from GitHub Container Registry
+1. Create a directory for your configuration:
+```bash
+mkdir -p matcherino_bot
+cd matcherino_bot
+```
+
+2. Create a `.env` file with your credentials:
+```
+BOT_TOKEN=your_discord_bot_token
+DATABASE_URL=postgresql://postgres:your_password@db/matcherino
+MATCHERINO_TOURNAMENT_ID=your_tournament_id
+GITHUB_USERNAME=yourusername  # Replace with the GitHub username of the container owner
+```
+
+3. Download the docker-compose file and start the containers:
+```bash
+curl -O https://raw.githubusercontent.com/yourusername/matcherino-bot/main/docker-compose.ghcr.yml
+docker-compose -f docker-compose.ghcr.yml up -d
 ```
 
 ## Database Setup
@@ -78,9 +100,9 @@ The bot automatically creates the necessary tables on startup, but you need:
 ### Deploy on Unraid
 This repository includes configuration files for deploying on Unraid servers:
 
-- Using Docker with the provided `docker-compose.yml`
+- Using Docker with the provided compose files
 - GitHub Actions for automated deployment
-- Docker Hub integration
+- GitHub Container Registry integration
 - Unraid Docker Templates
 
 See the [Unraid Deployment Guide](UNRAID.md) for detailed instructions.
@@ -93,6 +115,9 @@ See the [Unraid Deployment Guide](UNRAID.md) for detailed instructions.
 - `matcherino_scraper.py` - Integration with Matcherino API
 - `sync_teams.py` - Team synchronization logic
 - Docker and deployment configuration files
+
+### Container Registry
+This project uses GitHub Container Registry (ghcr.io) to publish container images. When you push to the repository with the appropriate GitHub Actions workflow, the container image is automatically built and published.
 
 ### Contributing
 1. Fork the repository
