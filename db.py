@@ -56,7 +56,8 @@ class Database:
                         username TEXT NOT NULL,
                         registered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                         join_code TEXT,
-                        matcherino_username TEXT
+                        matcherino_username TEXT,
+                        banned BOOLEAN NOT NULL DEFAULT FALSE
                     )
                 ''')
                 
@@ -77,6 +78,15 @@ class Database:
                     ''')
                 except Exception as e:
                     logger.error(f"Error adding matcherino_username column: {e}")
+                
+                # Add banned column if it doesn't exist (for backwards compatibility)
+                try:
+                    await conn.execute('''
+                        ALTER TABLE registrations 
+                        ADD COLUMN IF NOT EXISTS banned BOOLEAN DEFAULT FALSE
+                    ''')
+                except Exception as e:
+                    logger.error(f"Error adding banned column: {e}")
                 
                 # Create the matcherino_teams table if it doesn't exist
                 await conn.execute('''
@@ -381,4 +391,139 @@ class Database:
                 return result
         except Exception as e:
             logger.error(f"Error retrieving user team: {e}")
-            raise 
+            raise
+            
+    async def unregister_user(self, user_id: int) -> bool:
+        """
+        Unregister a user from the tournament.
+        
+        Args:
+            user_id: The Discord user ID to unregister
+            
+        Returns:
+            bool: True if user was successfully unregistered, False if user wasn't registered
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                # Check if user is registered
+                is_registered = await self.is_user_registered(user_id)
+                
+                if not is_registered:
+                    return False
+                
+                # Remove user from team_members if they are part of a team
+                await conn.execute(
+                    "UPDATE team_members SET discord_user_id = NULL WHERE discord_user_id = $1",
+                    user_id
+                )
+                
+                # Delete the user from registrations
+                await conn.execute(
+                    "DELETE FROM registrations WHERE user_id = $1",
+                    user_id
+                )
+                
+                logger.info(f"Unregistered user with ID {user_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error unregistering user {user_id}: {e}")
+            raise
+            
+    async def ban_user(self, user_id: int, username: str) -> tuple:
+        """
+        Ban a user from registering for the tournament.
+        If the user is already registered, they will be marked as banned.
+        If not registered yet, a banned entry will be created for them.
+        
+        Args:
+            user_id: The Discord user ID to ban
+            username: The Discord username 
+            
+        Returns:
+            tuple: (was_registered, was_banned) 
+                  was_registered is True if user was already registered
+                  was_banned is True if user was successfully banned
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                # Check if user is already registered
+                existing = await conn.fetchrow(
+                    "SELECT * FROM registrations WHERE user_id = $1", user_id
+                )
+                
+                if existing:
+                    # User already exists, update the banned status
+                    await conn.execute(
+                        "UPDATE registrations SET banned = TRUE WHERE user_id = $1",
+                        user_id
+                    )
+                    
+                    # Remove user from team_members if they are part of a team
+                    await conn.execute(
+                        "UPDATE team_members SET discord_user_id = NULL WHERE discord_user_id = $1",
+                        user_id
+                    )
+                    
+                    logger.info(f"Banned existing user {username} ({user_id})")
+                    return (True, True)
+                else:
+                    # User doesn't exist, create a banned entry
+                    await conn.execute(
+                        "INSERT INTO registrations (user_id, username, registered_at, banned) VALUES ($1, $2, $3, TRUE)",
+                        user_id, username, datetime.utcnow()
+                    )
+                    
+                    logger.info(f"Created banned entry for user {username} ({user_id})")
+                    return (False, True)
+                    
+        except Exception as e:
+            logger.error(f"Error banning user {username} ({user_id}): {e}")
+            raise
+            
+    async def is_user_banned(self, user_id: int) -> bool:
+        """
+        Check if a user is banned from registration.
+        
+        Args:
+            user_id: The Discord user ID to check
+            
+        Returns:
+            bool: True if user is banned, False otherwise
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                banned = await conn.fetchval(
+                    "SELECT banned FROM registrations WHERE user_id = $1",
+                    user_id
+                )
+                
+                return bool(banned)
+        except Exception as e:
+            logger.error(f"Error checking if user {user_id} is banned: {e}")
+            raise
+
+    async def unban_user(self, user_id: int) -> bool:
+        """Unban a user from tournament registration.
+        
+        Args:
+            user_id (int): The Discord user ID to unban
+            
+        Returns:
+            bool: True if the user was successfully unbanned, False otherwise
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    query = """
+                        UPDATE registrations 
+                        SET banned = FALSE 
+                        WHERE user_id = $1 AND banned = TRUE
+                        RETURNING user_id
+                    """
+                    result = await conn.fetchrow(query, user_id)
+                    return result is not None
+                    
+        except Exception as e:
+            logger.error(f"Error unbanning user {user_id}: {e}")
+            return False

@@ -32,13 +32,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Constants
-MATCHERINO_LOGIN_URL = "https://matcherino.com/api/auth/login"
 MATCHERINO_BASE_URL = "https://matcherino.com"
 MATCHERINO_TOURNAMENT_PATH = "/t/"  # Append tournament ID to this path
 
-# Get credentials from environment variables (recommended to store in .env file)
-MATCHERINO_EMAIL = os.getenv("MATCHERINO_EMAIL")
-MATCHERINO_PASSWORD = os.getenv("MATCHERINO_PASSWORD")
+# Get tournament ID from environment variables
 DEFAULT_TOURNAMENT_ID = os.getenv("MATCHERINO_TOURNAMENT_ID")
 
 class MatcherinoScraper:
@@ -46,24 +43,16 @@ class MatcherinoScraper:
     Class for scraping team information from Matcherino tournament pages.
     
     This scraper can:
-    1. Log in to Matcherino (if needed)
-    2. Navigate to tournament pages
-    3. Extract team information including names and member usernames
-    4. Handle errors gracefully and provide robust data extraction
+    1. Navigate to tournament pages
+    2. Extract team information including names and member usernames
+    3. Handle errors gracefully and provide robust data extraction
     """
     
-    def __init__(self, email: Optional[str] = None, password: Optional[str] = None):
+    def __init__(self):
         """
-        Initialize the Matcherino scraper with optional login credentials.
-        
-        Args:
-            email (str, optional): Matcherino login email. Defaults to environment variable.
-            password (str, optional): Matcherino login password. Defaults to environment variable.
+        Initialize the Matcherino scraper.
         """
-        self.email = email or MATCHERINO_EMAIL
-        self.password = password or MATCHERINO_PASSWORD
         self.session = None
-        self.logged_in = False
         self.headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -91,49 +80,6 @@ class MatcherinoScraper:
             await self.session.close()
             self.session = None
     
-    async def login(self) -> bool:
-        """
-        Log in to Matcherino using the provided credentials.
-        
-        Returns:
-            bool: True if login was successful, False otherwise
-        """
-        if not self.email or not self.password:
-            logger.warning("Matcherino login credentials not provided. Some features may not work.")
-            return False
-        
-        if self.logged_in:
-            return True
-        
-        if not self.session:
-            await self.create_session()
-        
-        try:
-            # Login data payload
-            login_data = {
-                "email": self.email,
-                "password": self.password
-            }
-            
-            async with self.session.post(MATCHERINO_LOGIN_URL, json=login_data) as response:
-                if response.status == 200:
-                    response_json = await response.json()
-                    if response_json.get("token"):
-                        # Set auth token in headers if returned
-                        self.headers["Authorization"] = f"Bearer {response_json['token']}"
-                        self.session.headers.update(self.headers)
-                        self.logged_in = True
-                        logger.info("Successfully logged in to Matcherino")
-                        return True
-                
-                logger.error(f"Failed to log in to Matcherino. Status: {response.status}")
-                logger.debug(f"Response: {await response.text()}")
-                return False
-                
-        except aiohttp.ClientError as e:
-            logger.error(f"Error during Matcherino login: {e}")
-            return False
-    
     async def get_tournament_page(self, tournament_id: str) -> Optional[str]:
         """
         Get the HTML content of a tournament page.
@@ -156,14 +102,6 @@ class MatcherinoScraper:
                     html_content = await response.text()
                     logger.info(f"Successfully retrieved tournament page: {url}")
                     return html_content
-                elif response.status == 403:
-                    # Try logging in if we get a forbidden response
-                    if await self.login():
-                        # Retry after logging in
-                        async with self.session.get(url) as retry_response:
-                            if retry_response.status == 200:
-                                html_content = await retry_response.text()
-                                return html_content
                 
                 logger.error(f"Failed to fetch tournament page. Status: {response.status}")
                 return None
@@ -326,13 +264,6 @@ class MatcherinoScraper:
         logger.info(f"Fetching teams data for tournament: {tournament_id}")
         
         try:
-            # First, ensure we're logged in
-            if not self.logged_in:
-                login_success = await self.login()
-                if not login_success:
-                    logger.error("Failed to log in to Matcherino")
-                    return []
-                    
             # Get the teams page
             teams_page_url = f"{MATCHERINO_BASE_URL}{MATCHERINO_TOURNAMENT_PATH}{tournament_id}/teams"
             teams_data = await self._get_teams(teams_page_url)
@@ -443,11 +374,6 @@ async def test_scraper(tournament_id: Optional[str] = None):
     # Create scraper instance using context manager
     try:
         async with MatcherinoScraper() as scraper:
-            # Try to log in (optional)
-            if MATCHERINO_EMAIL and MATCHERINO_PASSWORD:
-                login_success = await scraper.login()
-                print(f"Login attempt {'successful' if login_success else 'failed'}")
-            
             # Get teams data
             print("\nFetching teams data...")
             teams_data = await scraper.get_teams_data(tournament_id)
@@ -474,8 +400,7 @@ async def test_scraper(tournament_id: Optional[str] = None):
                     print("\nNo team data or individual participants found.")
                     print("This could be due to:")
                     print("1. Invalid tournament ID")
-                    print("2. Login required to view the tournament")
-                    print("3. Changes in the Matcherino website structure")
+                    print("2. Changes in the Matcherino website structure")
     
     except Exception as e:
         print(f"Error during scraper test: {e}")
@@ -706,4 +631,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nOperation cancelled by user")
     except Exception as e:
-        print(f"Error: {e}") 
+        print(f"Error: {e}")

@@ -41,7 +41,8 @@ async def reset_database():
                 username TEXT NOT NULL,
                 matcherino_username TEXT,
                 registered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                join_code TEXT
+                join_code TEXT,
+                banned BOOLEAN NOT NULL DEFAULT FALSE
             )
         ''')
         
@@ -105,4 +106,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nOperation cancelled by user.")
     except Exception as e:
-        logger.critical(f"Unexpected error: {e}") 
+        logger.critical(f"Unexpected error: {e}")

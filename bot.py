@@ -32,7 +32,7 @@ if not BOT_TOKEN:
 TARGET_GUILD_ID = 1212508610438107166  # Guild ID for slash command sync
 
 # Tournament configuration
-TOURNAMENT_JOIN_CODE = "test test test"  # Central definition of join code for Matcherino
+TOURNAMENT_JOIN_CODE = "lenamilize"  # Central definition of join code for Matcherino
 TOURNAMENT_ID = os.getenv("MATCHERINO_TOURNAMENT_ID")
 if not TOURNAMENT_ID:
     logger.warning("MATCHERINO_TOURNAMENT_ID environment variable not set - team syncing will not work")
@@ -123,6 +123,15 @@ async def register(interaction: discord.Interaction, matcherino_username: str):
         user_id = interaction.user.id
         username = str(interaction.user)
         
+        # Check if the user is banned
+        is_banned = await db.is_user_banned(user_id)
+        if is_banned:
+            await interaction.response.send_message(
+                "You are banned from registering for this tournament. Please contact an administrator for assistance.",
+                ephemeral=True
+            )
+            return
+        
         # Validate Matcherino username format
         # Basic validation - non-empty and reasonable length
         if len(matcherino_username.strip()) < 3:
@@ -197,6 +206,15 @@ async def mycode(interaction: discord.Interaction):
     try:
         user_id = interaction.user.id
         
+        # Check if user is banned
+        is_banned = await db.is_user_banned(user_id)
+        if is_banned:
+            await interaction.response.send_message(
+                "You are banned from participating in this tournament. Please contact an administrator for assistance.",
+                ephemeral=True
+            )
+            return
+        
         # Check if the user is registered
         is_registered = await db.is_user_registered(user_id)
         
@@ -228,54 +246,6 @@ async def mycode(interaction: discord.Interaction):
             "An error occurred while retrieving the join code. Please try again later.",
             ephemeral=True
         )
-
-@bot.tree.command(
-    name="registered", 
-    description="Admin command to view all registered users", 
-    guild=discord.Object(id=TARGET_GUILD_ID)
-)
-@app_commands.default_permissions(administrator=True)
-async def registered_slash(interaction: discord.Interaction):
-    """Slash command to retrieve all registered users."""
-    try:
-        # Get all registered users
-        registered_users = await db.get_registered_users()
-        
-        if not registered_users:
-            await interaction.response.send_message("No users are currently registered for the tournament.", ephemeral=True)
-            return
-            
-        # Format the response
-        response = "**Registered Users:**\n\n"
-        response += f"Tournament join code for all users: **`{TOURNAMENT_JOIN_CODE}`**\n\n"
-        
-        for i, user in enumerate(registered_users, 1):
-            user_id = user['user_id']
-            username = user['username']
-            registered_at = user['registered_at'].strftime("%Y-%m-%d %H:%M:%S UTC")
-            
-            response += f"{i}. {username} (ID: {user_id})\n   Registered at: {registered_at}\n\n"
-            
-            # Discord has a character limit for messages, so we need to handle long responses
-            if len(response) > 1800:  # Safe limit to stay under Discord's 2000 character limit
-                await interaction.followup.send(response)
-                response = "**Continued:**\n\n"
-                
-        # Send any remaining response
-        if response:
-            # For the first response, use response.send_message
-            if len(registered_users) <= 10 or i <= 10:  # If it's the first chunk
-                await interaction.response.send_message(response, ephemeral=True)
-            else:  # For subsequent chunks
-                await interaction.followup.send(response, ephemeral=True)
-            
-    except Exception as e:
-        logger.error(f"Error in registered command: {e}")
-        # If we haven't responded yet
-        try:
-            await interaction.response.send_message("An error occurred while retrieving registered users.", ephemeral=True)
-        except:
-            await interaction.followup.send("An error occurred while retrieving registered users.", ephemeral=True)
 
 @bot.tree.command(
     name="check-code", 
@@ -321,10 +291,11 @@ async def export_slash(interaction: discord.Interaction):
         # Defer the response since this might take some time
         await interaction.response.defer(ephemeral=True)
             
-        # Get all registered users
+        # Get all registered users who are not banned
         registered_users = await db.get_registered_users()
+        active_users = [user for user in registered_users if not user['banned']]
         
-        if not registered_users:
+        if not active_users:
             await interaction.followup.send("No users are currently registered for the tournament.", ephemeral=True)
             return
             
@@ -336,7 +307,7 @@ async def export_slash(interaction: discord.Interaction):
         writer.writerow(['User ID', 'Username', 'Registered At'])
         
         # Write data
-        for user in registered_users:
+        for user in active_users:
             writer.writerow([
                 user['user_id'],
                 user['username'],
@@ -419,8 +390,18 @@ async def help_slash(interaction: discord.Interaction):
         inline=False
     )
     embed.add_field(
+        name="/leave",
+        value="Remove your own tournament registration",
+        inline=False
+    )
+    embed.add_field(
         name="/mycode",
         value="Get your tournament join code",
+        inline=False
+    )
+    embed.add_field(
+        name="/unregister-self",
+        value="Remove your own tournament registration",
         inline=False
     )
     embed.add_field(
@@ -433,17 +414,23 @@ async def help_slash(interaction: discord.Interaction):
         value="Check which team a Discord user belongs to",
         inline=False
     )
+    embed.add_field(
+        name="/ping",
+        value="Check bot latency",
+        inline=False
+    )
+    embed.add_field(
+        name="/help",
+        value="Show this help message",
+        inline=False
+    )
+    
     
     # Add admin commands if user has admin permissions
     if interaction.user.guild_permissions.administrator:
         embed.add_field(
             name="Admin Commands",
             value="The following commands are available to administrators only:",
-            inline=False
-        )
-        embed.add_field(
-            name="/registered",
-            value="View all registered users",
             inline=False
         )
         embed.add_field(
@@ -464,6 +451,21 @@ async def help_slash(interaction: discord.Interaction):
         embed.add_field(
             name="/resync",
             value="Resync slash commands for this server",
+            inline=False
+        )
+        embed.add_field(
+            name="/unregister",
+            value="Unregister a user from the tournament",
+            inline=False
+        )
+        embed.add_field(
+            name="/ban",
+            value="Ban a user from registering for the tournament",
+            inline=False
+        )
+        embed.add_field(
+            name="/unban",
+            value="Unban a user from the tournament",
             inline=False
         )
     
@@ -554,6 +556,16 @@ async def my_team_command(interaction: discord.Interaction):
     
     try:
         user_id = interaction.user.id
+        
+        # Check if user is banned
+        is_banned = await db.is_user_banned(user_id)
+        if is_banned:
+            await interaction.followup.send(
+                "You are banned from participating in this tournament. Please contact an administrator for assistance.",
+                ephemeral=True
+            )
+            return
+            
         team_info = await db.get_user_team(user_id)
         
         if not team_info:
@@ -596,6 +608,16 @@ async def user_team_command(interaction: discord.Interaction, user: discord.User
     await interaction.response.defer(ephemeral=True)
     
     try:
+        # Check if the requesting user is banned
+        requester_id = interaction.user.id
+        is_banned = await db.is_user_banned(requester_id)
+        if is_banned:
+            await interaction.followup.send(
+                "You are banned from participating in this tournament. Please contact an administrator for assistance.",
+                ephemeral=True
+            )
+            return
+            
         team_info = await db.get_user_team(user.id)
         
         if not team_info:
@@ -637,11 +659,182 @@ async def user_team_command(interaction: discord.Interaction, user: discord.User
 async def job(ctx):
     """Command to send a specific link and delete the invocation."""
     try:
+        # Check if user has admin permissions
+        if not ctx.author.guild_permissions.administrator:
+            return  # Silently ignore if user doesn't have admin permissions
         
         # Send the link
         await ctx.send("https://media.discordapp.net/attachments/1118988563577577574/1150888584778371153/YiEtFVn.gif")
     except Exception as e:
         logger.error(f"Error in job command: {e}")
+
+@bot.tree.command(
+    name="unregister", 
+    description="Admin command to unregister a user from the tournament", 
+    guild=discord.Object(id=TARGET_GUILD_ID)
+)
+@app_commands.default_permissions(administrator=True)
+async def unregister_command(interaction: discord.Interaction, user: discord.User):
+    """Admin command to unregister a user from the tournament."""
+    try:
+        user_id = user.id
+        username = str(user)
+        
+        # Check if the user is registered first
+        is_registered = await db.is_user_registered(user_id)
+        
+        if not is_registered:
+            await interaction.response.send_message(f"User {username} is not registered for the tournament.", ephemeral=True)
+            return
+        
+        # Try to remove the "Registered" role if it exists
+        guild = interaction.guild
+        registered_role = discord.utils.get(guild.roles, name="Registered")
+        
+        if registered_role and user in guild.members:
+            member = guild.get_member(user_id)
+            if member and registered_role in member.roles:
+                try:
+                    await member.remove_roles(registered_role)
+                    logger.info(f"Removed 'Registered' role from user {username} ({user_id})")
+                except discord.Forbidden:
+                    logger.error(f"Bot doesn't have permission to remove roles from {username} ({user_id})")
+                except Exception as e:
+                    logger.error(f"Error removing role from {username} ({user_id}): {e}")
+        
+        # Unregister the user
+        success = await db.unregister_user(user_id)
+        
+        if success:
+            await interaction.response.send_message(f"User {username} has been unregistered from the tournament.", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"Failed to unregister user {username}. There might have been a database error.", ephemeral=True)
+            
+    except Exception as e:
+        logger.error(f"Error in unregister command: {e}")
+        await interaction.response.send_message("An error occurred while unregistering the user.", ephemeral=True)
+
+@bot.tree.command(
+    name="ban", 
+    description="Admin command to ban a user from registering for the tournament", 
+    guild=discord.Object(id=TARGET_GUILD_ID)
+)
+@app_commands.default_permissions(administrator=True)
+async def ban_command(interaction: discord.Interaction, user: discord.User):
+    """Admin command to ban a user from registering for the tournament."""
+    try:
+        user_id = user.id
+        username = str(user)
+        
+        # Check if user is registered and unregister them first
+        is_registered = await db.is_user_registered(user_id)
+        if is_registered:
+            await db.unregister_user(user_id)
+            logger.info(f"Unregistered banned user {username} ({user_id})")
+        
+        # Try to remove the "Registered" role if it exists
+        guild = interaction.guild
+        registered_role = discord.utils.get(guild.roles, name="Registered")
+        
+        if registered_role and user in guild.members:
+            member = guild.get_member(user_id)
+            if member and registered_role in member.roles:
+                try:
+                    await member.remove_roles(registered_role)
+                    logger.info(f"Removed 'Registered' role from banned user {username} ({user_id})")
+                except discord.Forbidden:
+                    logger.error(f"Bot doesn't have permission to remove roles from {username} ({user_id})")
+                except Exception as e:
+                    logger.error(f"Error removing role from {username} ({user_id}): {e}")
+        
+        # Ban the user
+        success = await db.ban_user(user_id, username)
+        
+        if success:
+            message = f"User {username} has been banned from registering for the tournament"
+            if is_registered:
+                message += " and was unregistered from the tournament"
+            await interaction.response.send_message(f"{message}.", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"Failed to ban user {username}.", ephemeral=True)
+            
+    except Exception as e:
+        logger.error(f"Error in ban command: {e}")
+        await interaction.response.send_message("An error occurred while banning the user.", ephemeral=True)
+
+@bot.tree.command(
+    name="unban", 
+    description="Admin command to unban a user from the tournament", 
+    guild=discord.Object(id=TARGET_GUILD_ID)
+)
+@app_commands.default_permissions(administrator=True)
+async def unban_command(interaction: discord.Interaction, user: discord.User):
+    """Admin command to unban a user from tournament registration."""
+    try:
+        user_id = user.id
+        username = str(user)
+        
+        # Check if user is banned first
+        is_banned = await db.is_user_banned(user_id)
+        
+        if not is_banned:
+            await interaction.response.send_message(f"User {username} is not banned from the tournament.", ephemeral=True)
+            return
+        
+        # Unban the user
+        success = await db.unban_user(user_id)
+        
+        if success:
+            await interaction.response.send_message(f"User {username} has been unbanned and can now register for the tournament.", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"Failed to unban user {username}.", ephemeral=True)
+            
+    except Exception as e:
+        logger.error(f"Error in unban command: {e}")
+        await interaction.response.send_message("An error occurred while unbanning the user.", ephemeral=True)
+
+@bot.tree.command(
+    name="leave", 
+    description="Remove your own tournament registration", 
+    guild=discord.Object(id=TARGET_GUILD_ID)
+)
+async def unregister_self_command(interaction: discord.Interaction):
+    """Command for users to unregister themselves from the tournament."""
+    try:
+        user_id = interaction.user.id
+        username = str(interaction.user)
+        
+        # Check if the user is registered first
+        is_registered = await db.is_user_registered(user_id)
+        
+        if not is_registered:
+            await interaction.response.send_message("You are not registered for the tournament.", ephemeral=True)
+            return
+        
+        # Try to remove the "Registered" role if it exists
+        guild = interaction.guild
+        registered_role = discord.utils.get(guild.roles, name="Registered")
+        
+        if registered_role and registered_role in interaction.user.roles:
+            try:
+                await interaction.user.remove_roles(registered_role)
+                logger.info(f"Removed 'Registered' role from user {username} ({user_id})")
+            except discord.Forbidden:
+                logger.error(f"Bot doesn't have permission to remove roles from {username} ({user_id})")
+            except Exception as e:
+                logger.error(f"Error removing role from {username} ({user_id}): {e}")
+        
+        # Unregister the user
+        success = await db.unregister_user(user_id)
+        
+        if success:
+            await interaction.response.send_message("You have been unregistered from the tournament.", ephemeral=True)
+        else:
+            await interaction.response.send_message("Failed to unregister you from the tournament. There might have been a database error.", ephemeral=True)
+            
+    except Exception as e:
+        logger.error(f"Error in unregister-self command: {e}")
+        await interaction.response.send_message("An error occurred while unregistering you from the tournament.", ephemeral=True)
 
 async def main():
     """Main function to run the bot."""
@@ -661,4 +854,4 @@ async def main():
             await db.close()
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
