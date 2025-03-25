@@ -517,25 +517,29 @@ async def sync_matcherino_teams():
             # then marks the current teams as active
             await db.update_matcherino_teams(teams_data)
             
-            # Get all teams and filter out the inactive ones (no longer on Matcherino)
-            all_teams = await db.get_matcherino_teams(active_only=False)
-            active_teams = [team for team in all_teams if team['is_active']]
-            inactive_teams = [team for team in all_teams if not team['is_active']]
-            
-            # Remove inactive teams
-            if inactive_teams:
-                logger.info(f"Found {len(inactive_teams)} teams that are no longer on Matcherino")
-                for team in inactive_teams:
-                    team_id = team['team_id']
-                    team_name = team['team_name']
-                    logger.info(f"Removing inactive team: {team_name} (ID: {team_id})")
-                    
-                    # Delete the team from the database
-                    async with db.pool.acquire() as conn:
-                        # Team members will be automatically deleted due to the CASCADE constraint
-                        await conn.execute("DELETE FROM matcherino_teams WHERE team_id = $1", team_id)
+            # Get all inactive teams (those no longer on Matcherino)
+            async with db.pool.acquire() as conn:
+                inactive_teams = await conn.fetch(
+                    "SELECT team_id, team_name FROM matcherino_teams WHERE is_active = FALSE"
+                )
                 
-                logger.info(f"Removed {len(inactive_teams)} inactive teams")
+                if inactive_teams:
+                    logger.info(f"Found {len(inactive_teams)} teams that are no longer on Matcherino")
+                    
+                    # Delete all inactive teams in a single transaction
+                    async with conn.transaction():
+                        for team in inactive_teams:
+                            team_id = team['team_id']
+                            team_name = team['team_name']
+                            logger.info(f"Removing inactive team: {team_name} (ID: {team_id})")
+                            
+                            # Delete team members first (although CASCADE should handle this)
+                            await conn.execute("DELETE FROM team_members WHERE team_id = $1", team_id)
+                            
+                            # Then delete the team itself
+                            await conn.execute("DELETE FROM matcherino_teams WHERE team_id = $1", team_id)
+                    
+                    logger.info(f"Successfully removed {len(inactive_teams)} inactive teams")
             
             logger.info(f"Team sync completed successfully - updated {len(teams_data)} teams")
             return teams_data
