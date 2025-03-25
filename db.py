@@ -551,3 +551,56 @@ class Database:
         except Exception as e:
             logger.error(f"Error unbanning user {user_id}: {e}")
             return False
+
+    async def get_inactive_teams(self):
+        """
+        Get all teams that are marked as inactive (no longer present on Matcherino).
+        
+        Returns:
+            list: A list of dictionaries containing inactive team information
+        """
+        if not self.pool:
+            await self.create_pool()
+            
+        try:
+            async with self.pool.acquire() as conn:
+                # Get all inactive teams
+                query = "SELECT team_id, team_name FROM matcherino_teams WHERE is_active = FALSE ORDER BY team_name"
+                
+                teams = await conn.fetch(query)
+                
+                # Convert to list of dictionaries
+                result = [dict(team) for team in teams]
+                
+                return result
+        except Exception as e:
+            logger.error(f"Error retrieving inactive Matcherino teams: {e}")
+            raise
+            
+    async def remove_team(self, team_id):
+        """
+        Remove a team from the database.
+        This will cascade delete related team member records due to foreign key constraints.
+        
+        Args:
+            team_id: The ID of the team to remove
+            
+        Returns:
+            bool: True if the team was successfully removed, False otherwise
+        """
+        if not self.pool:
+            await self.create_pool()
+            
+        try:
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    # Delete the team (will cascade to delete team members due to foreign key)
+                    await conn.execute(
+                        "DELETE FROM matcherino_teams WHERE team_id = $1",
+                        team_id
+                    )
+                    
+                    return True
+        except Exception as e:
+            logger.error(f"Error removing team {team_id}: {e}")
+            return False
