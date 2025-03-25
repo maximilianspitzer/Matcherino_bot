@@ -568,7 +568,7 @@ class Database:
                 query = "SELECT team_id, team_name FROM matcherino_teams WHERE is_active = FALSE ORDER BY team_name"
                 
                 teams = await conn.fetch(query)
-                
+                logger.info(f"Retrieved {len(teams)} inactive teams from database")
                 # Convert to list of dictionaries
                 result = [dict(team) for team in teams]
                 
