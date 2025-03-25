@@ -794,6 +794,33 @@ async def unban_command(interaction: discord.Interaction, user: discord.User):
         await interaction.response.send_message("An error occurred while unbanning the user.", ephemeral=True)
 
 @bot.tree.command(
+    name="matcherino-username",
+    description="Admin command to get a user's Matcherino username",
+    guild=discord.Object(id=TARGET_GUILD_ID)
+)
+@app_commands.default_permissions(administrator=True)
+async def matcherino_username_command(interaction: discord.Interaction, user: discord.User):
+    """Admin command to get a user's Matcherino username."""
+    try:
+        user_id = user.id
+        username = str(user)
+        
+        # Get the user's Matcherino username
+        matcherino_username = await db.get_matcherino_username(user_id)
+        await interaction.response.send_message(
+            f"User: {username} (ID: {user_id})\nMatcherino Username: **{matcherino_username}**",
+            ephemeral=True
+        )
+
+
+    except Exception as e:
+        logger.error(f"Error in matcherino-username command: {e}")
+        await interaction.response.send_message("An error occurred while retrieving the user's Matcherino username.", ephemeral=True)
+        return
+
+
+
+@bot.tree.command(
     name="leave", 
     description="Remove your own tournament registration", 
     guild=discord.Object(id=TARGET_GUILD_ID)

@@ -343,6 +343,30 @@ class Database:
             logger.error(f"Error retrieving Matcherino teams: {e}")
             raise
     
+    async def get_matcherino_username(self, user_id: int) -> str:
+        """
+        Get the Matcherino username for a registered user.
+        
+        Args:
+            user_id: The Discord user ID
+        """
+        if not self.pool:
+            await self.create_pool()
+            
+        try:
+            async with self.pool.acquire() as conn:
+                # Get the Matcherino username
+                matcherino_username = await conn.fetchval(
+                    "SELECT matcherino_username FROM registrations WHERE user_id = $1",
+                    user_id
+                )
+                
+                return matcherino_username
+        except Exception as e:
+            logger.error(f"Error retrieving Matcherino username for user {user_id}: {e}")
+            raise
+
+
     async def get_user_team(self, user_id):
         """
         Get the team information for a Discord user.
