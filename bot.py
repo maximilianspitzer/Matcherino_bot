@@ -1198,24 +1198,6 @@ async def match_free_agents_command(interaction: discord.Interaction):
         await interaction.followup.send(f"An error occurred while matching free agents: {str(e)}", ephemeral=True)
 
 
-async def main():
-    """Main function to run the bot."""
-    try:
-        async with bot:
-            await bot.start(BOT_TOKEN)
-    except KeyboardInterrupt:
-        # Handle clean shutdown on keyboard interrupt
-        logger.info("Bot shutting down...")
-        if hasattr(bot, 'db') and bot.db:
-            await bot.db.close()
-    except Exception as e:
-        logger.critical(f"Unexpected error: {e}")
-    finally:
-        # Ensure clean shutdown
-        if db.pool:
-            await db.close()
-
-
 @bot.tree.command(
     name="send-username-reminders", 
     description="Send reminders to all users with improperly formatted Matcherino usernames",
@@ -1565,3 +1547,26 @@ async def send_username_reminders_command(interaction: discord.Interaction, conf
     except Exception as e:
         logger.error(f"Error in send-username-reminders command: {e}", exc_info=True)
         await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+
+
+async def main():
+    """Main function to run the bot."""
+    try:
+        async with bot:
+            await bot.start(BOT_TOKEN)
+    except KeyboardInterrupt:
+        # Handle clean shutdown on keyboard interrupt
+        logger.info("Bot shutting down...")
+        if hasattr(bot, 'db') and bot.db:
+            await bot.db.close()
+    except Exception as e:
+        logger.critical(f"Unexpected error: {e}")
+    finally:
+        # Ensure clean shutdown
+        if db.pool:
+            await db.close()
+
+# Execute the main function when the script is run directly
+if __name__ == "__main__":
+    asyncio.run(main())
