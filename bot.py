@@ -1217,13 +1217,20 @@ async def main():
 
 
 @bot.tree.command(
-    name="test-reminder", 
-    description="Test the username reminder by sending it to only one user",
+    name="send-username-reminders", 
+    description="Send reminders to all users with improperly formatted Matcherino usernames",
     guild=discord.Object(id=TARGET_GUILD_ID)
 )
 @app_commands.default_permissions(administrator=True)
-async def test_reminder_command(interaction: discord.Interaction):
-    """Admin command to test the username reminder functionality with a specific user."""
+async def send_username_reminders_command(interaction: discord.Interaction, confirm: bool = False, batch_size: int = 20, delay_seconds: float = 0.5):
+    """
+    Admin command to send reminders to users with improperly formatted Matcherino usernames.
+    
+    Args:
+        confirm (bool): Set to True to confirm sending multiple DMs
+        batch_size (int): Number of users to process in each batch
+        delay_seconds (float): Delay between each DM to avoid rate limits
+    """
     if not TOURNAMENT_ID:
         await interaction.response.send_message("MATCHERINO_TOURNAMENT_ID is not set. Please set it in the .env file.", ephemeral=True)
         return
@@ -1231,131 +1238,330 @@ async def test_reminder_command(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     
     try:
-        # Your Discord user ID to target
-        test_user_id = 295580076249055242
+        # Check for confirmation to prevent accidental mass DM
+        if not confirm:
+            await interaction.followup.send(
+                "⚠️ **Warning**: This command will send DMs to all users who have incorrectly formatted Matcherino usernames. "
+                "To confirm, run this command again with `confirm` set to `True`.\n\n"
+                "You can also specify `batch_size` (default: 20) and `delay_seconds` (default: 0.5) parameters for rate limiting.",
+                ephemeral=True
+            )
+            return
         
-        # Get the user's Matcherino username
-        db_users = await db.get_all_matcherino_usernames()
-        test_user = None
+        logger.info(f"Starting username format reminder process with batch_size={batch_size}, delay_seconds={delay_seconds}")
         
-        for user in db_users:
-            if user['user_id'] == test_user_id:
-                test_user = user
-                break
-                
-        if not test_user:
-            await interaction.followup.send(f"Test user with ID {test_user_id} not found or has no Matcherino username. Make sure you've registered with the `/register` command using an incorrect username format first.", ephemeral=True)
+        # Get all users with their Matcherino usernames
+        try:
+            db_users = await db.get_all_matcherino_usernames()
+            if not db_users:
+                await interaction.followup.send("No users with Matcherino usernames found in database.", ephemeral=True)
+                return
+            
+            logger.info(f"Found {len(db_users)} users with Matcherino usernames in database")
+        except Exception as e:
+            logger.error(f"Error retrieving users from database: {e}", exc_info=True)
+            await interaction.followup.send(
+                f"Error retrieving users from database: {str(e)}",
+                ephemeral=True
+            )
             return
         
         # Fetch Matcherino participants to get correct userId format
-        async with MatcherinoScraper() as scraper:
-            participants = await scraper.get_tournament_participants(TOURNAMENT_ID)
-            
-            if not participants:
-                await interaction.followup.send("No participants found in the Matcherino tournament.", ephemeral=True)
-                return
-        
-        # Get matcherino username
-        matcherino_username = test_user.get('matcherino_username', '').strip()
-        discord_username = test_user.get('username', '')
-        
-        if not matcherino_username:
-            await interaction.followup.send(f"Test user has no Matcherino username set.", ephemeral=True)
-            return
-            
-        # Check if username has proper format (has userId tag)
-        base_name = matcherino_username.split('#')[0].strip().lower()
-        has_tag = '#' in matcherino_username
-        
-        # Find the corresponding participant
-        participant = None
-        for p in participants:
-            if p.get('name', '').strip().lower() == base_name:
-                participant = p
-                break
-        
-        # If we found a participant match, create a proper suggested format
-        if participant:
-            proper_format = f"{participant['name']}#{participant['user_id']}"
-            id_info_message = "We've found what we believe is your Matcherino user ID, but please verify that this matches your account and update it accordingly. \n\n 1. Navigate to your profile (top right) \n 2. Copy your entire username to your clipboard."
-        else:
-            # If no participant found, just suggest adding a generic tag
-            proper_format = f"{matcherino_username}#userId"
-            id_info_message = "We couldn't automatically find your Matcherino user ID. Please follow these instructions to locate it: \n\n 1. Navigate to your profile (top right) \n 2. Copy your entire username to your clipboard."
-                        
-        # Send test DM
         try:
-            # Get discord user
-            discord_user = await bot.fetch_user(test_user_id)
-            
-            if not discord_user:
-                await interaction.followup.send(f"Could not find Discord user with ID {test_user_id}", ephemeral=True)
-                return
+            async with MatcherinoScraper() as scraper:
+                participants = await scraper.get_tournament_participants(TOURNAMENT_ID)
                 
-            # Create and send the DM
-            dm_embed = discord.Embed(
-                title="Matcherino Username Format Update Required",
-                description=f"Hello! We noticed your Matcherino username format needs to be updated for proper matching in our tournament system.",
-                color=discord.Color.blue()
-            )
-            
-            # Add warning message at the top
-            dm_embed.add_field(
-                name="⚠️ IMPORTANT WARNING ⚠️",
-                value="**❗ Users with improperly formatted usernames will be automatically UNREGISTERED from both Discord and Matcherino systems ❗**\n\n🚫 This will PREVENT your participation in the tournament\n\n⏰ Please update your username format IMMEDIATELY to avoid removal",
-                inline=False
-            )
-            
-            dm_embed.add_field(
-                name="Your current Matcherino username",
-                value=f"`{matcherino_username}`",
-                inline=False
-            )
-            
-            dm_embed.add_field(
-                name="Please update to this format",
-                value=f"`{proper_format}`",
-                inline=False
-            )
-            
-            # Add different messages based on whether we found their ID
-            if participant:
-                dm_embed.add_field(
-                    name="Verify your user ID",
-                    value=id_info_message,
-                    inline=False
-                )
-            else:
-                dm_embed.add_field(
-                    name="Find your user ID",
-                    value=id_info_message,
-                    inline=False
-                )
-            
-            dm_embed.add_field(
-                name="How to update",
-                value=f"Use the `/register` command with your corrected username:\n`/register {proper_format}`",
-                inline=False
-            )
-            
-            # Add footer with disclaimer
-            dm_embed.set_footer(text="This message was sent from Secondbest Server as you registered for the tournament.")
-            
-            await discord_user.send(embed=dm_embed)
-            
-            # Confirm to admin that message was sent
-            await interaction.followup.send(f"Test reminder sent to {discord_username} (ID: {test_user_id})\n\nReminder details:\n- Current username: `{matcherino_username}`\n- Suggested format: `{proper_format}`\n- ID verification message included", ephemeral=True)
-                
-        except discord.Forbidden:
-            await interaction.followup.send(f"Cannot send DM to test user - they may have DMs closed.", ephemeral=True)
+                if not participants:
+                    await interaction.followup.send("No participants found in the Matcherino tournament.", ephemeral=True)
+                    return
+                    
+                logger.info(f"Found {len(participants)} participants from Matcherino")
         except Exception as e:
-            logger.error(f"Error sending test DM: {e}")
-            await interaction.followup.send(f"Error sending test DM: {str(e)}", ephemeral=True)
+            logger.error(f"Error fetching participants from Matcherino: {e}", exc_info=True)
+            await interaction.followup.send(
+                f"Error fetching participants from Matcherino: {str(e)}",
+                ephemeral=True
+            )
+            return
+        
+        # Create participant lookup dictionaries
+        participant_by_name = {}
+        for p in participants:
+            name = p.get('name', '').strip().lower()
+            if name:
+                participant_by_name[name] = p
+                
+        # Track users who need reminders
+        users_needing_reminders = []
+        
+        # Check each user's Matcherino username format
+        for user in db_users:
+            matcherino_username = user.get('matcherino_username', '').strip()
+            user_id = user.get('user_id')
+            discord_username = user.get('username', '')
             
+            if not matcherino_username:
+                continue
+                
+            # Check if username has proper format (has userId tag)
+            has_tag = '#' in matcherino_username
+            base_name = matcherino_username.split('#')[0].strip().lower()
+            
+            # Try to find matching participant
+            participant = participant_by_name.get(base_name)
+            
+            # If no tag or doesn't match expected format, add to reminder list
+            if not has_tag or (participant and not matcherino_username.lower().endswith(f"#{participant['user_id']}".lower())):
+                users_needing_reminders.append({
+                    'user': user,
+                    'participant': participant,
+                    'base_name': base_name,
+                    'status': 'pending'  # Track status for backup purposes
+                })
+                logger.info(f"User {discord_username} (ID: {user_id}) needs reminder - current format: {matcherino_username}")
+        
+        # Report how many users need reminders
+        if not users_needing_reminders:
+            await interaction.followup.send("No users with improperly formatted Matcherino usernames found. All usernames appear to be correct.", ephemeral=True)
+            return
+        
+        logger.info(f"Found {len(users_needing_reminders)} users with improperly formatted Matcherino usernames")
+        
+        # Create a backup CSV with all users who need reminders
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_filename = f"username_reminders_{timestamp}.csv"
+        
+        # Create backup CSV
+        with open(backup_filename, 'w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['discord_id', 'discord_username', 'matcherino_username', 'suggested_format', 'status']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for entry in users_needing_reminders:
+                user = entry['user']
+                participant = entry['participant']
+                
+                if participant:
+                    suggested_format = f"{participant['name']}#{participant['user_id']}"
+                else:
+                    suggested_format = f"{user.get('matcherino_username', '').strip()}#userId"
+                    
+                writer.writerow({
+                    'discord_id': user.get('user_id', ''),
+                    'discord_username': user.get('username', ''),
+                    'matcherino_username': user.get('matcherino_username', '').strip(),
+                    'suggested_format': suggested_format,
+                    'status': 'pending'
+                })
+                
+        logger.info(f"Created backup file with {len(users_needing_reminders)} entries: {backup_filename}")
+        
+        # Send initial status update
+        status_embed = discord.Embed(
+            title="Username Reminder Process Started",
+            description=f"Starting to process {len(users_needing_reminders)} users in batches of {batch_size}",
+            color=discord.Color.blue(),
+            timestamp=datetime.datetime.utcnow()
+        )
+        
+        status_embed.add_field(
+            name="Status",
+            value=f"📋 Created backup file: `{backup_filename}`\n⏳ Processing reminders...",
+            inline=False
+        )
+        
+        status_message = await interaction.followup.send(embed=status_embed, ephemeral=True)
+        
+        # Track results
+        success_count = 0
+        failed_count = 0
+        failed_users = []
+        
+        # Process users in batches
+        total_users = len(users_needing_reminders)
+        total_batches = (total_users + batch_size - 1) // batch_size  # Ceiling division
+        
+        for batch_index in range(total_batches):
+            batch_start = batch_index * batch_size
+            batch_end = min(batch_start + batch_size, total_users)
+            current_batch = users_needing_reminders[batch_start:batch_end]
+            
+            logger.info(f"Processing batch {batch_index + 1}/{total_batches} ({len(current_batch)} users)")
+            
+            # Update status message every batch
+            if batch_index > 0:
+                progress = (batch_start / total_users) * 100
+                progress_embed = discord.Embed(
+                    title="Username Reminder Progress",
+                    description=f"Processing batch {batch_index + 1}/{total_batches}",
+                    color=discord.Color.blue(),
+                    timestamp=datetime.datetime.utcnow()
+                )
+                
+                progress_embed.add_field(
+                    name="Status",
+                    value=f"✅ Completed: {batch_start}/{total_users} ({progress:.1f}%)\n"
+                          f"📊 Success: {success_count}, Failed: {failed_count}",
+                    inline=False
+                )
+                
+                await status_message.edit(embed=progress_embed)
+            
+            # Process each user in current batch
+            for entry in current_batch:
+                user = entry['user']
+                participant = entry['participant']
+                base_name = entry['base_name']
+                
+                user_id = user['user_id']
+                discord_username = user['username']
+                matcherino_username = user.get('matcherino_username', '').strip()
+                
+                # Create proper format suggestion based on participant data
+                if participant:
+                    proper_format = f"{participant['name']}#{participant['user_id']}"
+                    id_info_message = "We've found what we believe is your Matcherino user ID, but please verify that this matches your account and update it accordingly. \n\n 1. Navigate to your profile (top right) \n 2. Copy your entire username to your clipboard."
+                else:
+                    # If no participant found, just suggest adding a generic tag
+                    proper_format = f"{matcherino_username}#userId"
+                    id_info_message = "We couldn't automatically find your Matcherino user ID. Please follow these instructions to locate it: \n\n 1. Navigate to your profile (top right) \n 2. Copy your entire username to your clipboard."
+                
+                try:
+                    # Get discord user
+                    discord_user = await bot.fetch_user(user_id)
+                    
+                    if not discord_user:
+                        logger.warning(f"Could not find Discord user with ID {user_id}")
+                        failed_count += 1
+                        failed_users.append(f"{discord_username} (ID: {user_id}) - User not found")
+                        entry['status'] = 'failed - user not found'
+                        continue
+                        
+                    # Create and send the DM
+                    dm_embed = discord.Embed(
+                        title="Matcherino Username Format Update Required",
+                        description=f"Hello! We noticed your Matcherino username format needs to be updated for proper matching in our tournament system.",
+                        color=discord.Color.blue()
+                    )
+                    
+                    # Add warning message at the top
+                    dm_embed.add_field(
+                        name="⚠️ IMPORTANT WARNING ⚠️",
+                        value="**❗ Users with improperly formatted usernames will be automatically UNREGISTERED from both Discord and Matcherino systems ❗**\n\n🚫 This will PREVENT your participation in the tournament\n\n⏰ Please update your username format IMMEDIATELY to avoid removal",
+                        inline=False
+                    )
+                    
+                    dm_embed.add_field(
+                        name="Your current Matcherino username",
+                        value=f"`{matcherino_username}`",
+                        inline=False
+                    )
+                    
+                    dm_embed.add_field(
+                        name="Please update to this format",
+                        value=f"`{proper_format}`",
+                        inline=False
+                    )
+                    
+                    # Add different messages based on whether we found their ID
+                    dm_embed.add_field(
+                        name="Verify your user ID" if participant else "Find your user ID",
+                        value=id_info_message,
+                        inline=False
+                    )
+                    
+                    dm_embed.add_field(
+                        name="How to update",
+                        value=f"Use the `/register` command with your corrected username:\n`/register {proper_format}`",
+                        inline=False
+                    )
+                    
+                    # Add footer with disclaimer
+                    dm_embed.set_footer(text="This message was sent from Secondbest Server as you registered for the tournament.")
+                    
+                    await discord_user.send(embed=dm_embed)
+                    success_count += 1
+                    entry['status'] = 'success'
+                    logger.info(f"Sent username reminder to {discord_username} (ID: {user_id})")
+                        
+                    # Add delay to avoid rate limiting
+                    await asyncio.sleep(delay_seconds)
+                        
+                except discord.Forbidden:
+                    logger.warning(f"Cannot send DM to {discord_username} (ID: {user_id}) - they may have DMs closed")
+                    failed_count += 1
+                    failed_users.append(f"{discord_username} (ID: {user_id}) - DMs closed")
+                    entry['status'] = 'failed - DMs closed'
+                    
+                except Exception as e:
+                    logger.error(f"Error sending DM to {discord_username} (ID: {user_id}): {e}")
+                    failed_count += 1
+                    failed_users.append(f"{discord_username} (ID: {user_id}) - Error: {str(e)}")
+                    entry['status'] = f'failed - {str(e)}'
+        
+        # Update backup CSV with final status
+        with open(backup_filename, 'w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['discord_id', 'discord_username', 'matcherino_username', 'suggested_format', 'status']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            
+            for entry in users_needing_reminders:
+                user = entry['user']
+                participant = entry['participant']
+                
+                if participant:
+                    suggested_format = f"{participant['name']}#{participant['user_id']}"
+                else:
+                    suggested_format = f"{user.get('matcherino_username', '').strip()}#userId"
+                    
+                writer.writerow({
+                    'discord_id': user.get('user_id', ''),
+                    'discord_username': user.get('username', ''),
+                    'matcherino_username': user.get('matcherino_username', '').strip(),
+                    'suggested_format': suggested_format,
+                    'status': entry.get('status', 'unknown')
+                })
+                
+        logger.info(f"Updated backup file with final status: {backup_filename}")
+        
+        # Create final result embed
+        result_embed = discord.Embed(
+            title="Username Reminder Results",
+            description=f"Processed {len(users_needing_reminders)} users with improperly formatted usernames",
+            color=discord.Color.green() if failed_count == 0 else discord.Color.orange(),
+            timestamp=datetime.datetime.utcnow()
+        )
+        
+        result_embed.add_field(
+            name="Summary",
+            value=f"✅ Successfully sent: **{success_count}** reminders\n❌ Failed to send: **{failed_count}** reminders",
+            inline=False
+        )
+        
+        # Add batch processing details
+        result_embed.add_field(
+            name="Processing Details",
+            value=f"⏱️ Delay between messages: **{delay_seconds}s**\n"
+                  f"📊 Batch size: **{batch_size}** users\n"
+                  f"📋 Backup file: `{backup_filename}`",
+            inline=False
+        )
+        
+        # If there were failures, add them to the embed
+        if failed_users:
+            # Truncate the list if it's too long for Discord
+            failure_text = "\n".join(failed_users[:10])
+            if len(failed_users) > 10:
+                failure_text += f"\n... and {len(failed_users) - 10} more"
+                
+            result_embed.add_field(
+                name="Failed Reminders",
+                value=failure_text,
+                inline=False
+            )
+        
+        await interaction.followup.send(embed=result_embed, ephemeral=True)
+        
     except Exception as e:
-        logger.error(f"Error in test-reminder command: {e}", exc_info=True)
+        logger.error(f"Error in send-username-reminders command: {e}", exc_info=True)
         await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
