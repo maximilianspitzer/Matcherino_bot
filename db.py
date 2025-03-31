@@ -138,13 +138,13 @@ class Database:
                 
                 if existing:
                     # User already registered
-                    if matcherino_username and not existing['matcherino_username']:
-                        # Update the Matcherino username if it wasn't set before
+                    if matcherino_username:
+                        # Always update the Matcherino username if a new one is provided
                         await conn.execute(
                             "UPDATE registrations SET matcherino_username = $1 WHERE user_id = $2",
                             matcherino_username, user_id
                         )
-                        logger.info(f"Updated Matcherino username for user {username} ({user_id})")
+                        logger.info(f"Updated Matcherino username for user {username} ({user_id}) to {matcherino_username}")
                     
                     return (False, self.join_code)
                 
@@ -604,3 +604,33 @@ class Database:
         except Exception as e:
             logger.error(f"Error removing team {team_id}: {e}")
             return False
+
+    async def get_all_matcherino_usernames(self):
+        """
+        Get all registered users with their Matcherino usernames.
+        
+        Returns:
+            list: A list of dictionaries with user_id, username, and matcherino_username
+        """
+        if not self.pool:
+            await self.create_pool()
+        
+        try:
+            async with self.pool.acquire() as conn:
+                query = """
+                    SELECT 
+                        user_id, 
+                        username, 
+                        matcherino_username 
+                    FROM registrations 
+                    WHERE banned = FALSE 
+                    AND matcherino_username IS NOT NULL 
+                    AND matcherino_username != ''
+                    ORDER BY matcherino_username
+                """
+                
+                records = await conn.fetch(query)
+                return [dict(record) for record in records]
+        except Exception as e:
+            logger.error(f"Error retrieving Matcherino usernames: {e}")
+            raise

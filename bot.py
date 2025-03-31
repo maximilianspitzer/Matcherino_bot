@@ -400,11 +400,6 @@ async def help_slash(interaction: discord.Interaction):
         inline=False
     )
     embed.add_field(
-        name="/unregister-self",
-        value="Remove your own tournament registration",
-        inline=False
-    )
-    embed.add_field(
         name="/my-team",
         value="View your team and its members",
         inline=False
@@ -412,6 +407,11 @@ async def help_slash(interaction: discord.Interaction):
     embed.add_field(
         name="/user-team",
         value="Check which team a Discord user belongs to",
+        inline=False
+    )
+    embed.add_field(
+        name="/verify-username",
+        value="Check if your Matcherino username is properly formatted",
         inline=False
     )
     embed.add_field(
@@ -466,6 +466,16 @@ async def help_slash(interaction: discord.Interaction):
         embed.add_field(
             name="/unban",
             value="Unban a user from the tournament",
+            inline=False
+        )
+        embed.add_field(
+            name="/match-free-agents",
+            value="Match Matcherino participants with Discord users",
+            inline=False
+        )
+        embed.add_field(
+            name="/send-username-reminders",
+            value="Send reminders to users with improperly formatted Matcherino usernames",
             inline=False
         )
     
@@ -586,7 +596,7 @@ async def my_team_command(interaction: discord.Interaction):
                 ephemeral=True
             )
             return
-            
+        
         team_info = await db.get_user_team(user_id)
         
         if not team_info:
@@ -846,7 +856,7 @@ async def matcherino_username_command(interaction: discord.Interaction, user: di
     description="Remove your own tournament registration", 
     guild=discord.Object(id=TARGET_GUILD_ID)
 )
-async def unregister_self_command(interaction: discord.Interaction):
+async def leave_command(interaction: discord.Interaction):
     """Command for users to unregister themselves from the tournament."""
     try:
         user_id = interaction.user.id
@@ -881,8 +891,312 @@ async def unregister_self_command(interaction: discord.Interaction):
             await interaction.response.send_message("Failed to unregister you from the tournament. There might have been a database error.", ephemeral=True)
             
     except Exception as e:
-        logger.error(f"Error in unregister-self command: {e}")
+        logger.error(f"Error in leave command: {e}")
         await interaction.response.send_message("An error occurred while unregistering you from the tournament.", ephemeral=True)
+
+async def match_participants_with_db_users(participants, db_users):
+    """
+    Match participants from Matcherino API with users in the database.
+    
+    Args:
+        participants (list): List of participants from Matcherino API
+        db_users (list): List of users from the database with Matcherino usernames
+        
+    Returns:
+        tuple: (exact_matches, name_only_matches, ambiguous_matches, 
+                unmatched_participants, unmatched_db_users)
+    """
+    # Initialize result containers
+    exact_matches = []        # Perfect matches (user with matcherino_username = participant name)
+    name_only_matches = []    # Matches based on username only (no tag)
+    ambiguous_matches = []    # Multiple potential matches for the same username
+    
+    # Track discord users that have been matched to avoid duplicates
+    matched_discord_ids = set()
+    
+    # Track participant names that have been processed
+    processed_participants = set()
+    
+    # Pre-process db_users into dictionaries for O(1) lookups
+    # 1. Dictionary for exact matches (lowercase full username -> user)
+    exact_match_dict = {}
+    # 2. Dictionary for name-only matches (lowercase name part -> list of users)
+    name_match_dict = {}
+    
+    for user in db_users:
+        matcherino_username = user.get('matcherino_username', '').strip()
+        if not matcherino_username:
+            continue
+            
+        # Store for exact match lookup
+        exact_match_dict[matcherino_username.lower()] = user
+        
+        # Store for name-only match lookup
+        name_part = matcherino_username.split('#')[0].strip().lower()
+        if name_part not in name_match_dict:
+            name_match_dict[name_part] = []
+        name_match_dict[name_part].append(user)
+    
+    # Process each participant once with O(1) lookups
+    for participant in participants:
+        participant_name = participant.get('name', '').strip()
+        game_username = participant.get('game_username', '').strip()
+        
+        if not participant_name or participant_name.lower() in processed_participants:
+            continue
+            
+        # Format for exact match: displayName#userId
+        expected_full_username = f"{participant_name}#{participant.get('user_id', '')}"
+        expected_full_username_lower = expected_full_username.lower()
+        
+        # Check for exact match with O(1) lookup
+        if expected_full_username_lower in exact_match_dict:
+            user = exact_match_dict[expected_full_username_lower]
+            if user['user_id'] not in matched_discord_ids:
+                logger.info(f"Found exact match: '{user.get('matcherino_username', '')}' matches with '{expected_full_username}'")
+                exact_matches.append({
+                    'participant': participant_name,
+                    'participant_id': participant.get('user_id', ''),
+                    'discord_username': user['username'],
+                    'discord_id': user['user_id'],
+                    'matcherino_id': participant.get('user_id', ''),
+                    'game_username': game_username,
+                    'db_matcherino_username': user.get('matcherino_username', '')
+                })
+                matched_discord_ids.add(user['user_id'])
+                processed_participants.add(participant_name.lower())
+                continue
+        
+        # If no exact match, try name-only match with O(1) lookup
+        name_only = participant_name.split('#')[0].strip().lower()
+        potential_matches = name_match_dict.get(name_only, [])
+        
+        # Filter out already matched users
+        potential_matches = [user for user in potential_matches if user['user_id'] not in matched_discord_ids]
+        
+        # Process potential matches
+        if len(potential_matches) == 1:
+            # Single name match found
+            match = potential_matches[0]
+            name_only_matches.append({
+                'participant': participant_name,
+                'participant_tag': game_username,
+                'discord_username': match['username'],
+                'discord_id': match['user_id'],
+                'matcherino_id': participant.get('user_id', ''),
+                'game_username': game_username,
+                'db_matcherino_username': match.get('matcherino_username', '')
+            })
+            matched_discord_ids.add(match['user_id'])
+            processed_participants.add(participant_name.lower())
+        elif len(potential_matches) > 1:
+            # Multiple potential matches - ambiguous
+            ambiguous_matches.append({
+                'participant': participant_name,
+                'participant_tag': game_username,
+                'potential_matches': [{
+                    'discord_username': user['username'],
+                    'discord_id': user['user_id'],
+                    'matcherino_username': user.get('matcherino_username', '')
+                } for user in potential_matches]
+            })
+            processed_participants.add(participant_name.lower())
+    
+    # Collect unmatched participants and users in a single pass
+    unmatched_participants = [
+        {
+            'name': p.get('name', '').strip(),
+            'matcherino_id': p.get('user_id', ''),
+            'game_username': p.get('game_username', '')
+        }
+        for p in participants
+        if p.get('name', '').strip() and p.get('name', '').strip().lower() not in processed_participants
+    ]
+    
+    unmatched_db_users = [
+        {
+            'discord_username': user['username'],
+            'discord_id': user['user_id'],
+            'matcherino_username': user.get('matcherino_username', '')
+        }
+        for user in db_users
+        if user['user_id'] not in matched_discord_ids
+    ]
+    
+    return (
+        exact_matches, 
+        name_only_matches, 
+        ambiguous_matches,
+        unmatched_participants,
+        unmatched_db_users
+    )
+
+async def generate_match_results_csv(
+    exact_matches, 
+    name_only_matches,
+    ambiguous_matches,
+    unmatched_participants,
+    unmatched_db_users
+):
+    """
+    Generate a CSV file with match results.
+    
+    Returns:
+        discord.File: CSV file for Discord attachment
+    """
+    csv_buffer = io.StringIO()
+    writer = csv.writer(csv_buffer)
+    
+    # Write header
+    writer.writerow(['Match Type', 'Matcherino Username', 'Discord Username', 'Discord ID', 
+                    'Matcherino ID', 'Game Username', 'DB Matcherino Username'])
+    
+    # Write exact matches
+    for match in exact_matches:
+        writer.writerow([
+            'Exact Match', 
+            match['participant'], 
+            match['discord_username'], 
+            match['discord_id'],
+            match['matcherino_id'],
+            match['game_username'],
+            match['db_matcherino_username']
+        ])
+    
+    # Write name-only matches
+    for match in name_only_matches:
+        writer.writerow([
+            'Name Match', 
+            match['participant'], 
+            match['discord_username'], 
+            match['discord_id'],
+            match['matcherino_id'],
+            match['game_username'],
+            match['db_matcherino_username']
+        ])
+    
+    # Write ambiguous matches
+    for match in ambiguous_matches:
+        for potential in match['potential_matches']:
+            writer.writerow([
+                'Ambiguous', 
+                match['participant'], 
+                potential['discord_username'], 
+                potential['discord_id'],
+                '',
+                match.get('participant_tag', ''),
+                potential['matcherino_username']
+            ])
+    
+    # Write unmatched participants
+    for participant in unmatched_participants:
+        writer.writerow([
+            'Unmatched Matcherino', 
+            participant['name'], 
+            '', 
+            '',
+            participant['matcherino_id'],
+            participant['game_username'],
+            ''
+        ])
+            
+    # Write unmatched DB users
+    for user in unmatched_db_users:
+        writer.writerow([
+            'Unmatched DB', 
+            '', 
+            user['discord_username'], 
+            user['discord_id'],
+            '',
+            '',
+            user['matcherino_username']
+        ])
+
+    # Prepare the CSV file for downloading
+    csv_buffer.seek(0)
+    csv_bytes = csv_buffer.getvalue().encode('utf-8')
+    return discord.File(io.BytesIO(csv_bytes), filename="matcherino_participant_matches.csv")
+
+@bot.tree.command(
+    name="match-free-agents", 
+    description="Match free agents from Matcherino with Discord users",
+    guild=discord.Object(id=TARGET_GUILD_ID)
+)
+@app_commands.default_permissions(administrator=True)
+async def match_free_agents_command(interaction: discord.Interaction):
+    """Command to match Matcherino participants with Discord users using three-level matching approach."""
+    if not TOURNAMENT_ID:
+        await interaction.response.send_message("MATCHERINO_TOURNAMENT_ID is not set. Please set it in the .env file.", ephemeral=True)
+        return
+        
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        logger.info("Starting free agent matching process")
+        
+        # Step 1: Get database users with their Matcherino usernames
+        db_users = await db.get_all_matcherino_usernames()
+        if not db_users:
+            await interaction.followup.send("No users with Matcherino usernames found in database.", ephemeral=True)
+            return
+        
+        logger.info(f"Found {len(db_users)} users with Matcherino usernames in database")
+        
+        # Step 2: Fetch all participants from Matcherino API
+        async with MatcherinoScraper() as scraper:
+            participants = await scraper.get_tournament_participants(TOURNAMENT_ID)
+            
+            if not participants:
+                await interaction.followup.send("No participants found in the Matcherino tournament.", ephemeral=True)
+                return
+                
+            logger.info(f"Found {len(participants)} participants from Matcherino")
+        
+        # Step 3: Match participants with database users
+        (exact_matches, name_only_matches, ambiguous_matches,
+         unmatched_participants, unmatched_db_users) = await match_participants_with_db_users(
+             participants, db_users
+        )
+        
+        logger.info(f"Found {len(exact_matches)} exact matches and {len(name_only_matches)} name-only matches")
+        logger.info(f"Found {len(ambiguous_matches)} ambiguous matches")
+        logger.info(f"{len(unmatched_participants)} participants remain unmatched")
+        logger.info(f"{len(unmatched_db_users)} registered users were not found on Matcherino")
+        
+        # Step 4: Prepare and send the matching results report
+        total_matched = len(exact_matches) + len(name_only_matches)
+        embed = discord.Embed(
+            title="Free Agent Matching Results",
+            description=f"Matched {total_matched} out of {len(participants)} participants",
+            color=discord.Color.blue(),
+            timestamp=datetime.datetime.utcnow()
+        )
+        
+        # Add summary statistics
+        embed.add_field(
+            name="Summary",
+            value=f"""
+• **{len(exact_matches)}** exact username matches (with tag)
+• **{len(name_only_matches)}** name-only matches (without tag)
+• **{len(ambiguous_matches)}** ambiguous matches (need manual review)
+• **{len(unmatched_participants)}** unmatched participants
+• **{len(unmatched_db_users)}** unmatched database users
+            """,
+            inline=False
+        )
+        
+        # Generate CSV report file
+        csv_file = await generate_match_results_csv(
+            exact_matches, name_only_matches, ambiguous_matches,
+            unmatched_participants, unmatched_db_users
+        )
+        
+        await interaction.followup.send(embed=embed, file=csv_file, ephemeral=True)
+        
+    except Exception as e:
+        logger.error(f"Error matching free agents: {e}", exc_info=True)
+        await interaction.followup.send(f"An error occurred while matching free agents: {str(e)}", ephemeral=True)
+
 
 async def main():
     """Main function to run the bot."""
@@ -900,6 +1214,148 @@ async def main():
         # Ensure clean shutdown
         if db.pool:
             await db.close()
+
+
+@bot.tree.command(
+    name="test-reminder", 
+    description="Test the username reminder by sending it to only one user",
+    guild=discord.Object(id=TARGET_GUILD_ID)
+)
+@app_commands.default_permissions(administrator=True)
+async def test_reminder_command(interaction: discord.Interaction):
+    """Admin command to test the username reminder functionality with a specific user."""
+    if not TOURNAMENT_ID:
+        await interaction.response.send_message("MATCHERINO_TOURNAMENT_ID is not set. Please set it in the .env file.", ephemeral=True)
+        return
+        
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        # Your Discord user ID to target
+        test_user_id = 295580076249055242
+        
+        # Get the user's Matcherino username
+        db_users = await db.get_all_matcherino_usernames()
+        test_user = None
+        
+        for user in db_users:
+            if user['user_id'] == test_user_id:
+                test_user = user
+                break
+                
+        if not test_user:
+            await interaction.followup.send(f"Test user with ID {test_user_id} not found or has no Matcherino username. Make sure you've registered with the `/register` command using an incorrect username format first.", ephemeral=True)
+            return
+        
+        # Fetch Matcherino participants to get correct userId format
+        async with MatcherinoScraper() as scraper:
+            participants = await scraper.get_tournament_participants(TOURNAMENT_ID)
+            
+            if not participants:
+                await interaction.followup.send("No participants found in the Matcherino tournament.", ephemeral=True)
+                return
+        
+        # Get matcherino username
+        matcherino_username = test_user.get('matcherino_username', '').strip()
+        discord_username = test_user.get('username', '')
+        
+        if not matcherino_username:
+            await interaction.followup.send(f"Test user has no Matcherino username set.", ephemeral=True)
+            return
+            
+        # Check if username has proper format (has userId tag)
+        base_name = matcherino_username.split('#')[0].strip().lower()
+        has_tag = '#' in matcherino_username
+        
+        # Find the corresponding participant
+        participant = None
+        for p in participants:
+            if p.get('name', '').strip().lower() == base_name:
+                participant = p
+                break
+        
+        # If we found a participant match, create a proper suggested format
+        if participant:
+            proper_format = f"{participant['name']}#{participant['user_id']}"
+            id_info_message = "We've found what we believe is your Matcherino user ID, but please verify that this matches your account and update it accordingly. \n\n 1. Navigate to your profile (top right) \n 2. Copy your entire username to your clipboard."
+        else:
+            # If no participant found, just suggest adding a generic tag
+            proper_format = f"{matcherino_username}#userId"
+            id_info_message = "We couldn't automatically find your Matcherino user ID. Please follow these instructions to locate it: \n\n 1. Navigate to your profile (top right) \n 2. Copy your entire username to your clipboard."
+                        
+        # Send test DM
+        try:
+            # Get discord user
+            discord_user = await bot.fetch_user(test_user_id)
+            
+            if not discord_user:
+                await interaction.followup.send(f"Could not find Discord user with ID {test_user_id}", ephemeral=True)
+                return
+                
+            # Create and send the DM
+            dm_embed = discord.Embed(
+                title="Matcherino Username Format Update Required",
+                description=f"Hello! We noticed your Matcherino username format needs to be updated for proper matching in our tournament system.",
+                color=discord.Color.blue()
+            )
+            
+            # Add warning message at the top
+            dm_embed.add_field(
+                name="⚠️ IMPORTANT WARNING ⚠️",
+                value="**❗ Users with improperly formatted usernames will be automatically UNREGISTERED from both Discord and Matcherino systems ❗**\n\n🚫 This will PREVENT your participation in the tournament\n\n⏰ Please update your username format IMMEDIATELY to avoid removal",
+                inline=False
+            )
+            
+            dm_embed.add_field(
+                name="Your current Matcherino username",
+                value=f"`{matcherino_username}`",
+                inline=False
+            )
+            
+            dm_embed.add_field(
+                name="Please update to this format",
+                value=f"`{proper_format}`",
+                inline=False
+            )
+            
+            # Add different messages based on whether we found their ID
+            if participant:
+                dm_embed.add_field(
+                    name="Verify your user ID",
+                    value=id_info_message,
+                    inline=False
+                )
+            else:
+                dm_embed.add_field(
+                    name="Find your user ID",
+                    value=id_info_message,
+                    inline=False
+                )
+            
+            dm_embed.add_field(
+                name="How to update",
+                value=f"Use the `/register` command with your corrected username:\n`/register {proper_format}`",
+                inline=False
+            )
+            
+            # Add footer with disclaimer
+            dm_embed.set_footer(text="This message was sent from Secondbest Server as you registered for the tournament.")
+            
+            await discord_user.send(embed=dm_embed)
+            
+            # Confirm to admin that message was sent
+            await interaction.followup.send(f"Test reminder sent to {discord_username} (ID: {test_user_id})\n\nReminder details:\n- Current username: `{matcherino_username}`\n- Suggested format: `{proper_format}`\n- ID verification message included", ephemeral=True)
+                
+        except discord.Forbidden:
+            await interaction.followup.send(f"Cannot send DM to test user - they may have DMs closed.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"Error sending test DM: {e}")
+            await interaction.followup.send(f"Error sending test DM: {str(e)}", ephemeral=True)
+            
+    except Exception as e:
+        logger.error(f"Error in test-reminder command: {e}", exc_info=True)
+        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

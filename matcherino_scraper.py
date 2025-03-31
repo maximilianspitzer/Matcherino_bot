@@ -11,14 +11,11 @@ import json
 import logging
 import asyncio
 import aiohttp
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Any
 from bs4 import BeautifulSoup
 import re
 from dotenv import load_dotenv
-import time
 from datetime import datetime
-import pathlib
-import argparse
 
 # Load environment variables
 load_dotenv()
@@ -276,8 +273,7 @@ class MatcherinoScraper:
     
     async def get_tournament_participants(self, tournament_id: str) -> List[Dict[str, Any]]:
         """
-        Extract individual participant information from tournament.
-        Alternative to get_teams_data for tournaments with individual participants.
+        Extract individual participant information from tournament using the Matcherino API.
         
         Args:
             tournament_id (str): The ID of the tournament to fetch participants from
@@ -285,74 +281,166 @@ class MatcherinoScraper:
         Returns:
             List[Dict[str, Any]]: List of dictionaries containing participant information
         """
-        html_content = await self.get_tournament_page(tournament_id)
-        
-        if not html_content:
-            logger.error("No HTML content retrieved, cannot extract participant information")
+        if not self.session:
+            await self.create_session()
+            
+        try:
+            # Use the specified bountyId (146289) directly
+            bounty_id = "146289"  # Hardcoded bountyId as specified
+            
+            logger.info(f"Using hard-coded bountyId: {bounty_id} for tournament {tournament_id}")
+            participants_data = []
+            current_page = 0
+            total_pages = None
+            
+            # Define API-specific headers
+            api_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Origin": "https://matcherino.com",
+                "Referer": f"https://matcherino.com/t/{tournament_id}",
+            }
+
+            # Loop through all pages
+            while total_pages is None or current_page < total_pages:
+                # Use the direct API endpoint to get participants with the specified bountyId
+                api_url = f"https://api.matcherino.com/__api/bounties/participants?bountyId={bounty_id}&page={current_page}&pageSize=500"
+                logger.info(f"Fetching participants from API (page {current_page+1}): {api_url}")
+                
+                async with self.session.get(api_url, headers=api_headers) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to fetch participants from API. Status: {response.status}")
+                        break
+                    
+                    data = await response.json()
+                    logger.info(f"Successfully fetched participant data from API page {current_page+1}")
+                    
+                    # Update total pages if needed
+                    if total_pages is None and "body" in data and "pageCount" in data["body"]:
+                        total_pages = data["body"]["pageCount"]
+                        logger.info(f"Total pages: {total_pages}")
+                    
+                    # Extract participants from the API response
+                    if "body" in data and "contents" in data["body"]:
+                        contents = data["body"]["contents"]
+                        logger.info(f"Found {len(contents)} potential participants in API response (page {current_page+1})")
+                        
+                        # Process each participant
+                        for participant in contents:
+                            # Skip entries without displayName
+                            if "displayName" not in participant:
+                                continue
+                                
+                            display_name = participant.get("displayName", "").strip()
+                            
+                            # Skip empty names or obvious non-player entries
+                            if not display_name or display_name.lower() in ['do not make a team', 'dont make a team', 'looking for team']:
+                                continue
+                                
+                            # Create participant entry
+                            participant_data = {
+                                'name': display_name,
+                                'user_id': participant.get("userId", ""),
+                                'auth_id': participant.get("authId", ""),
+                                'auth_provider': participant.get("authProvider", ""),
+                                'game_username': participant.get("gameUsername", "")
+                            }
+                            
+                            participants_data.append(participant_data)
+                
+                # Move to the next page
+                current_page += 1
+                
+            logger.info(f"Total participants found across all pages: {len(participants_data)}")
+            return participants_data
+        except Exception as e:
+            logger.error(f"Error getting participants from API: {e}", exc_info=True)
             return []
+    
+    async def get_bounty_id(self, tournament_id: str) -> Optional[str]:
+        """
+        Extract the bountyId from the tournament page.
+        
+        Args:
+            tournament_id (str): The tournament ID from the URL
+            
+        Returns:
+            Optional[str]: The extracted bountyId or None if not found
+        """
+        if not self.session:
+            await self.create_session()
+        
+        url = f"{MATCHERINO_BASE_URL}{MATCHERINO_TOURNAMENT_PATH}{tournament_id}"
+        logger.info(f"Fetching tournament page to extract bountyId: {url}")
         
         try:
-            # Parse the HTML content
-            soup = BeautifulSoup(html_content, 'html.parser')
-            
-            # Participants data will be stored here
-            participants_data = []
-            
-            # Look for participant information in the page
-            participants_container = soup.find('div', class_=re.compile(r'.*participants.*', re.IGNORECASE))
-            
-            if participants_container:
-                participant_elements = participants_container.find_all('div', class_=re.compile(r'.*participant.*', re.IGNORECASE))
+            async with self.session.get(url) as response:
+                if response.status != 200:
+                    logger.error(f"Failed to fetch tournament page. Status: {response.status}")
+                    # Fallback to using tournament_id as bounty_id
+                    logger.info(f"Falling back to using tournament ID as bountyId: {tournament_id}")
+                    return tournament_id
                 
-                for participant_elem in participant_elements:
-                    participant_data = {}
-                    
-                    # Extract participant name
-                    name_elem = participant_elem.find('h3') or participant_elem.find('div', class_=re.compile(r'.*name.*', re.IGNORECASE))
-                    if name_elem:
-                        participant_data['name'] = name_elem.text.strip()
-                    else:
-                        participant_data['name'] = "Unknown Participant"
-                    
-                    # Extract other participant info if available
-                    username_elem = participant_elem.find('div', class_=re.compile(r'.*username.*', re.IGNORECASE))
-                    if username_elem:
-                        participant_data['username'] = username_elem.text.strip()
-                    
-                    participants_data.append(participant_data)
-            
-            # If we couldn't find participants using the above method, try alternative approach
-            if not participants_data:
-                script_tags = soup.find_all('script', type='application/json')
+                html_content = await response.text()
                 
-                for script in script_tags:
-                    try:
-                        json_data = json.loads(script.string)
-                        
-                        # Look for participant data in the JSON
-                        if isinstance(json_data, dict) and 'participants' in json_data:
-                            participants_json = json_data.get('participants')
-                            
-                            if participants_json and isinstance(participants_json, list):
-                                for participant in participants_json:
-                                    if isinstance(participant, dict):
-                                        participant_data = {
-                                            'name': participant.get('name', 'Unknown Participant'),
-                                            'username': participant.get('username', ''),
-                                            'id': participant.get('id', '')
-                                        }
-                                        participants_data.append(participant_data)
-                                
-                                if participants_data:
-                                    break  # Stop if we found participant data
-                    except (json.JSONDecodeError, AttributeError):
-                        continue
-            
-            return participants_data
-            
+                # For debugging, log a small sample of the HTML content
+                content_sample = html_content[:200] + "..." if len(html_content) > 200 else html_content
+                logger.debug(f"HTML content sample: {content_sample}")
+                
+                # Search for bountyId in script tags using regex patterns
+                # Pattern 1: Look for bountyId in JSON data
+                pattern1 = r'"bountyId":\s*(\d+)'
+                match = re.search(pattern1, html_content)
+                if match:
+                    bounty_id = match.group(1)
+                    logger.info(f"Successfully extracted bountyId: {bounty_id}")
+                    return bounty_id
+                
+                # Pattern 2: Look for bounty ID in API calls or object definitions
+                pattern2 = r'bounty["\']?\s*:\s*["\']?(\d+)'
+                match = re.search(pattern2, html_content, re.IGNORECASE)
+                if match:
+                    bounty_id = match.group(1)
+                    logger.info(f"Successfully extracted bountyId (pattern 2): {bounty_id}")
+                    return bounty_id
+                
+                # Pattern 3: Look for ID in URL parameters in script
+                pattern3 = r'bountyId=(\d+)'
+                match = re.search(pattern3, html_content)
+                if match:
+                    bounty_id = match.group(1)
+                    logger.info(f"Successfully extracted bountyId (pattern 3): {bounty_id}")
+                    return bounty_id
+                
+                # Pattern 4: Look for tiers with bounty ID
+                pattern4 = r'tiers":\s*\[\s*{\s*"bountyId":\s*(\d+)'
+                match = re.search(pattern4, html_content)
+                if match:
+                    bounty_id = match.group(1)
+                    logger.info(f"Successfully extracted bountyId (pattern 4): {bounty_id}")
+                    return bounty_id
+                    
+                # Pattern 5: Look for bounty ID in data attributes
+                pattern5 = r'data-bounty-id=["\']?(\d+)'
+                match = re.search(pattern5, html_content, re.IGNORECASE)
+                if match:
+                    bounty_id = match.group(1)
+                    logger.info(f"Successfully extracted bountyId (pattern 5): {bounty_id}")
+                    return bounty_id
+                
+                # If we get here, we couldn't find the bountyId in the HTML
+                logger.warning("Could not extract bountyId from tournament page HTML")
+                
+                # As a last resort, try to use the tournament ID itself as fallback
+                logger.info(f"Falling back to using tournament ID as bountyId: {tournament_id}")
+                return tournament_id
+                
         except Exception as e:
-            logger.error(f"Error parsing tournament participants: {e}")
-            return []
+            logger.error(f"Error extracting bountyId from tournament page: {e}")
+            # Fallback to tournament ID if any error occurs
+            logger.info(f"Error occurred, falling back to using tournament ID as bountyId: {tournament_id}")
+            return tournament_id
 
 
 async def test_scraper(tournament_id: Optional[str] = None):
@@ -404,231 +492,3 @@ async def test_scraper(tournament_id: Optional[str] = None):
     
     except Exception as e:
         print(f"Error during scraper test: {e}")
-
-
-def integrate_with_discord_bot():
-    """
-    Plan and documentation for integrating with the Discord bot.
-    
-    This function provides documentation on how to integrate this scraper
-    with the existing Discord bot for tracking tournament participants.
-    """
-    integration_doc = """
-    Integration with Discord Bot
-    ===========================
-    
-    To integrate this scraper with the Discord bot, follow these steps:
-    
-    1. Import the MatcherinoScraper class in bot.py:
-       ```python
-       from matcherino_scraper import MatcherinoScraper
-       ```
-    
-    2. Add a new command to fetch and display team information:
-       ```python
-       @bot.tree.command(name="teams", description="Get tournament team information", guild=discord.Object(id=TARGET_GUILD_ID))
-       async def teams_slash(interaction: discord.Interaction):
-           # Check if the user has permission
-           if not interaction.user.guild_permissions.administrator:
-               await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
-               return
-           
-           await interaction.response.defer(ephemeral=True)
-           
-           tournament_id = os.getenv("MATCHERINO_TOURNAMENT_ID")
-           if not tournament_id:
-               await interaction.followup.send("Tournament ID not configured. Please set the MATCHERINO_TOURNAMENT_ID environment variable.", ephemeral=True)
-               return
-           
-           try:
-               async with MatcherinoScraper() as scraper:
-                   teams_data = await scraper.get_teams_data(tournament_id)
-                   
-                   if not teams_data:
-                       await interaction.followup.send("No team data found for the tournament.", ephemeral=True)
-                       return
-                   
-                   response = "**Tournament Teams:**\n\n"
-                   
-                   for i, team in enumerate(teams_data, 1):
-                       response += f"{i}. **{team['name']}**\n"
-                       if team.get('members'):
-                           response += "   **Members:**\n"
-                           for member in team['members']:
-                               response += f"   - {member}\n"
-                       response += "\n"
-                       
-                       # Handle Discord message length limits
-                       if len(response) > 1900:
-                           await interaction.followup.send(response, ephemeral=True)
-                           response = "**Continued:**\n\n"
-                   
-                   if response:
-                       await interaction.followup.send(response, ephemeral=True)
-                   
-           except Exception as e:
-               logger.error(f"Error in teams command: {e}")
-               await interaction.followup.send(f"An error occurred while retrieving team information: {str(e)}", ephemeral=True)
-       ```
-    
-    3. Add a command to match Discord users with Matcherino participants:
-       ```python
-       @bot.tree.command(name="match-users", description="Match Discord users with Matcherino participants", guild=discord.Object(id=TARGET_GUILD_ID))
-       async def match_users_slash(interaction: discord.Interaction):
-           # Check if the user has permission
-           if not interaction.user.guild_permissions.administrator:
-               await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
-               return
-           
-           await interaction.response.defer(ephemeral=True)
-           
-           tournament_id = os.getenv("MATCHERINO_TOURNAMENT_ID")
-           if not tournament_id:
-               await interaction.followup.send("Tournament ID not configured. Please set the MATCHERINO_TOURNAMENT_ID environment variable.", ephemeral=True)
-               return
-           
-           try:
-               # Get all registered Discord users
-               registered_users = await db.get_registered_users()
-               
-               if not registered_users:
-                   await interaction.followup.send("No users are registered in the Discord bot.", ephemeral=True)
-                   return
-               
-               # Get Matcherino participants
-               async with MatcherinoScraper() as scraper:
-                   teams_data = await scraper.get_teams_data(tournament_id)
-                   
-                   # Extract all participant names from teams
-                   matcherino_participants = []
-                   for team in teams_data:
-                       if team.get('members'):
-                           for member in team['members']:
-                               matcherino_participants.append({
-                                   'name': member,
-                                   'team': team['name']
-                               })
-                   
-                   if not matcherino_participants:
-                       # Try getting individual participants
-                       participants = await scraper.get_tournament_participants(tournament_id)
-                       for participant in participants:
-                           matcherino_participants.append({
-                               'name': participant.get('name') or participant.get('username'),
-                               'team': 'Individual Participant'
-                           })
-                   
-                   if not matcherino_participants:
-                       await interaction.followup.send("No participants found in the Matcherino tournament.", ephemeral=True)
-                       return
-                   
-                   # Match Discord users to Matcherino participants
-                   # This is a simple matching strategy that can be improved
-                   matches = []
-                   unmatched_discord = []
-                   unmatched_matcherino = matcherino_participants.copy()
-                   
-                   for user in registered_users:
-                       discord_username = user['username']
-                       discord_id = user['user_id']
-                       matched = False
-                       
-                       # Try to find a match in Matcherino participants
-                       for i, participant in enumerate(unmatched_matcherino):
-                           # Simple matching logic - can be improved
-                           if (discord_username.lower() in participant['name'].lower() or
-                               participant['name'].lower() in discord_username.lower()):
-                               matches.append({
-                                   'discord_username': discord_username,
-                                   'discord_id': discord_id,
-                                   'matcherino_name': participant['name'],
-                                   'team': participant.get('team', 'Unknown')
-                               })
-                               unmatched_matcherino.pop(i)
-                               matched = True
-                               break
-                       
-                       if not matched:
-                           unmatched_discord.append({
-                               'discord_username': discord_username,
-                               'discord_id': discord_id
-                           })
-                   
-                   # Format response
-                   response = "**Discord Users Matched with Matcherino Participants:**\n\n"
-                   
-                   if matches:
-                       for match in matches:
-                           response += f"- Discord: {match['discord_username']} (ID: {match['discord_id']})\n"
-                           response += f"  Matcherino: {match['matcherino_name']}\n"
-                           response += f"  Team: {match['team']}\n\n"
-                   else:
-                       response += "No matches found.\n\n"
-                   
-                   response += "**Unmatched Discord Users:**\n\n"
-                   if unmatched_discord:
-                       for user in unmatched_discord:
-                           response += f"- {user['discord_username']} (ID: {user['discord_id']})\n"
-                   else:
-                       response += "None\n\n"
-                   
-                   response += "**Unmatched Matcherino Participants:**\n\n"
-                   if unmatched_matcherino:
-                       for participant in unmatched_matcherino:
-                           response += f"- {participant['name']} (Team: {participant.get('team', 'Unknown')})\n"
-                   else:
-                       response += "None\n\n"
-                   
-                   # Handle Discord message length limits
-                   if len(response) > 1900:
-                       await interaction.followup.send(response[:1900] + "...", ephemeral=True)
-                       await interaction.followup.send("... " + response[1900:], ephemeral=True)
-                   else:
-                       await interaction.followup.send(response, ephemeral=True)
-                   
-           except Exception as e:
-               logger.error(f"Error in match-users command: {e}")
-               await interaction.followup.send(f"An error occurred while matching users: {str(e)}", ephemeral=True)
-    """
-    
-    print(integration_doc)
-    return integration_doc
-
-
-if __name__ == "__main__":
-    """Run the test function when the script is executed directly"""
-    parser = argparse.ArgumentParser(description="Matcherino Team Scraper")
-    parser.add_argument('--tournament', '-t', type=str, default=DEFAULT_TOURNAMENT_ID,
-                        help=f'Tournament ID (default: {DEFAULT_TOURNAMENT_ID})')
-    
-    args = parser.parse_args()
-    
-    # Use passed tournament ID or default
-    tournament_id = args.tournament
-    
-    if not tournament_id:
-        print("Error: No tournament ID provided and MATCHERINO_TOURNAMENT_ID environment variable not set")
-        exit(1)
-    
-    print(f"Fetching data for tournament ID: {tournament_id}")
-    
-    # Run the scraper
-    async def run_scraper():
-        async with MatcherinoScraper() as scraper:
-            teams = await scraper.get_teams_data(tournament_id)
-            
-            print(f"\nFound {len(teams)} teams in tournament {tournament_id}:\n")
-            for i, team in enumerate(teams, 1):
-                print(f"{i}. {team['name']}")
-                if team.get('members'):
-                    print(f"   Members ({len(team['members'])}):")
-                    for member in team['members']:
-                        print(f"   - {member}")
-                print()
-    
-    try:
-        asyncio.run(run_scraper())
-    except KeyboardInterrupt:
-        print("\nOperation cancelled by user")
-    except Exception as e:
-        print(f"Error: {e}")
