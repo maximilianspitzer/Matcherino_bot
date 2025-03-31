@@ -1382,21 +1382,22 @@ async def send_username_reminders_command(interaction: discord.Interaction, conf
                 
         logger.info(f"Created backup file with {len(users_needing_reminders)} entries: {backup_filename}")
         
-        # Send initial status update
-        status_embed = discord.Embed(
-            title="Username Reminder Process Started",
-            description=f"Starting to process {len(users_needing_reminders)} users in batches of {batch_size}",
-            color=discord.Color.blue(),
-            timestamp=datetime.datetime.utcnow()
-        )
+        # Send initial status update that won't be edited later
+        try:
+            await interaction.followup.send(
+                f"Starting to process {len(users_needing_reminders)} users in batches of {batch_size}.\n"
+                f"📋 Created backup file: `{backup_filename}`\n⏳ Processing reminders...\n\n"
+                "I'll send a final report when complete. This may take several minutes.",
+                ephemeral=True
+            )
+        except discord.HTTPException as e:
+            logger.error(f"Error sending initial status update: {e}")
+            # Continue processing anyway
         
-        status_embed.add_field(
-            name="Status",
-            value=f"📋 Created backup file: `{backup_filename}`\n⏳ Processing reminders...",
-            inline=False
-        )
-        
-        status_message = await interaction.followup.send(embed=status_embed, ephemeral=True)
+        # Create a message directly in the channel for status updates
+        # that can be edited even after the interaction expires
+        status_channel = interaction.channel
+        status_message = None
         
         # Track results
         success_count = 0
@@ -1415,7 +1416,7 @@ async def send_username_reminders_command(interaction: discord.Interaction, conf
             logger.info(f"Processing batch {batch_index + 1}/{total_batches} ({len(current_batch)} users)")
             
             # Update status message every batch
-            if batch_index > 0:
+            if batch_index > 0 and batch_index % 2 == 0:  # Update every 2 batches to reduce API calls
                 progress = (batch_start / total_users) * 100
                 progress_embed = discord.Embed(
                     title="Username Reminder Progress",
@@ -1431,7 +1432,20 @@ async def send_username_reminders_command(interaction: discord.Interaction, conf
                     inline=False
                 )
                 
-                await status_message.edit(embed=progress_embed)
+                # Create or update status message
+                try:
+                    if status_message is None and status_channel:
+                        # First time creating the message (only for admins)
+                        status_message = await status_channel.send(
+                            content=f"Status update for {interaction.user.mention}'s username reminder command:",
+                            embed=progress_embed
+                        )
+                    elif status_message:
+                        # Update existing message
+                        await status_message.edit(embed=progress_embed)
+                except Exception as e:
+                    logger.error(f"Error updating status message: {e}")
+                    # Continue processing even if status updates fail
             
             # Process each user in current batch
             for entry in current_batch:
@@ -1586,13 +1600,364 @@ async def send_username_reminders_command(interaction: discord.Interaction, conf
                 inline=False
             )
         
-        await interaction.followup.send(embed=result_embed, ephemeral=True)
+        # Send final results - Try interaction first, fall back to channel message
+        try:
+            await interaction.followup.send(embed=result_embed, ephemeral=True)
+        except discord.HTTPException as e:
+            # If the interaction token expired, send directly to the channel
+            if status_channel:
+                # Only send if we have a channel reference
+                await status_channel.send(
+                    content=f"Final results for {interaction.user.mention}'s username reminder command:",
+                    embed=result_embed
+                )
+            logger.error(f"Could not send results via interaction followup: {e}")
+        
+        # Update any existing status message to show completion
+        if status_message:
+            try:
+                await status_message.edit(
+                    content=f"✅ **COMPLETED**: {interaction.user.mention}'s username reminder command finished!",
+                    embed=result_embed
+                )
+            except Exception as e:
+                logger.error(f"Error updating final status message: {e}")
         
     except Exception as e:
         logger.error(f"Error in send-username-reminders command: {e}", exc_info=True)
-        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+        
+        # Try to send error message through followup first
+        try:
+            await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+        except Exception as followup_error:
+            # If that fails, try to send directly to the channel
+            if interaction.channel:
+                await interaction.channel.send(
+                    f"{interaction.user.mention} An error occurred while processing username reminders: {str(e)}"
+                )
+            logger.error(f"Failed to send error message via followup: {followup_error}")
 
-
+@bot.tree.command(
+    name="continue-username-reminders", 
+    description="Continue sending reminders from a previous backup file",
+    guild=discord.Object(id=TARGET_GUILD_ID)
+)
+@app_commands.default_permissions(administrator=True)
+async def continue_username_reminders_command(interaction: discord.Interaction, backup_filename: str, batch_size: int = 20, delay_seconds: float = 0.5):
+    """
+    Admin command to continue sending reminders to users from a previous backup file.
+    
+    Args:
+        backup_filename: The name of the backup CSV file to resume from
+        batch_size: Number of users to process in each batch
+        delay_seconds: Delay between each DM to avoid rate limits
+    """
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        # Verify the backup file exists
+        if not os.path.exists(backup_filename):
+            await interaction.followup.send(
+                f"❌ Backup file `{backup_filename}` not found. Please check the filename and try again.",
+                ephemeral=True
+            )
+            return
+        
+        logger.info(f"Continuing username reminder process from backup: {backup_filename}")
+        
+        # Load users from the backup CSV
+        users_to_process = []
+        try:
+            with open(backup_filename, 'r', newline='', encoding='utf-8') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    # Only process users that haven't been successful yet
+                    if row['status'] != 'success':
+                        users_to_process.append({
+                            'user': {
+                                'user_id': int(row['discord_id']),
+                                'username': row['discord_username'],
+                                'matcherino_username': row['matcherino_username']
+                            },
+                            'suggested_format': row['suggested_format'],
+                            'status': row['status']
+                        })
+        except Exception as e:
+            logger.error(f"Error reading backup file: {e}", exc_info=True)
+            await interaction.followup.send(
+                f"❌ Error reading backup file: {str(e)}",
+                ephemeral=True
+            )
+            return
+            
+        if not users_to_process:
+            await interaction.followup.send(
+                "✅ No pending users found in the backup file. All users might have already been processed successfully.",
+                ephemeral=True
+            )
+            return
+            
+        logger.info(f"Found {len(users_to_process)} users to process from backup file")
+        
+        # Send initial status update
+        try:
+            await interaction.followup.send(
+                f"Continuing to process {len(users_to_process)} remaining users in batches of {batch_size}.\n"
+                f"📋 Using backup file: `{backup_filename}`\n⏳ Processing reminders...\n\n"
+                "I'll send a final report when complete. This may take several minutes.",
+                ephemeral=True
+            )
+        except discord.HTTPException as e:
+            logger.error(f"Error sending initial status update: {e}")
+            # Continue processing anyway
+            
+        # Create a message directly in the channel for status updates
+        status_channel = interaction.channel
+        status_message = None
+        
+        # Track results
+        success_count = 0
+        failed_count = 0
+        failed_users = []
+        
+        # Process users in batches
+        total_users = len(users_to_process)
+        total_batches = (total_users + batch_size - 1) // batch_size  # Ceiling division
+        
+        for batch_index in range(total_batches):
+            batch_start = batch_index * batch_size
+            batch_end = min(batch_start + batch_size, total_users)
+            current_batch = users_to_process[batch_start:batch_end]
+            
+            logger.info(f"Processing batch {batch_index + 1}/{total_batches} ({len(current_batch)} users)")
+            
+            # Update status message periodically
+            if batch_index > 0 and batch_index % 2 == 0:  # Update every 2 batches to reduce API calls
+                progress = (batch_start / total_users) * 100
+                progress_embed = discord.Embed(
+                    title="Username Reminder Progress (Continuing)",
+                    description=f"Processing batch {batch_index + 1}/{total_batches}",
+                    color=discord.Color.blue(),
+                    timestamp=datetime.datetime.utcnow()
+                )
+                
+                progress_embed.add_field(
+                    name="Status",
+                    value=f"✅ Completed: {batch_start}/{total_users} ({progress:.1f}%)\n"
+                          f"📊 Success: {success_count}, Failed: {failed_count}",
+                    inline=False
+                )
+                
+                # Create or update status message
+                try:
+                    if status_message is None and status_channel:
+                        status_message = await status_channel.send(
+                            content=f"Status update for {interaction.user.mention}'s username reminder continuation:",
+                            embed=progress_embed
+                        )
+                    elif status_message:
+                        await status_message.edit(embed=progress_embed)
+                except Exception as e:
+                    logger.error(f"Error updating status message: {e}")
+                    # Continue processing even if status updates fail
+            
+            # Process each user in current batch
+            for entry in current_batch:
+                user = entry['user']
+                suggested_format = entry['suggested_format']
+                
+                user_id = user['user_id']
+                discord_username = user['username']
+                matcherino_username = user.get('matcherino_username', '').strip()
+                
+                # Extract participant name from suggested format if possible
+                name_parts = suggested_format.split('#')
+                participant_name = name_parts[0] if len(name_parts) > 1 else matcherino_username
+                has_user_id = len(name_parts) > 1 and name_parts[1] != 'userId'
+                
+                # Create message content based on whether we have a user ID
+                if has_user_id:
+                    id_info_message = "We've found what we believe is your Matcherino user ID, but please verify that this matches your account and update it accordingly. \n\n 1. Navigate to your profile (top right) \n 2. Copy your entire username to your clipboard."
+                else:
+                    id_info_message = "We couldn't automatically find your Matcherino user ID. Please follow these instructions to locate it: \n\n 1. Navigate to your profile (top right) \n 2. Copy your entire username to your clipboard."
+                
+                try:
+                    # Get discord user
+                    discord_user = await bot.fetch_user(user_id)
+                    
+                    if not discord_user:
+                        logger.warning(f"Could not find Discord user with ID {user_id}")
+                        failed_count += 1
+                        failed_users.append(f"{discord_username} (ID: {user_id}) - User not found")
+                        entry['status'] = 'failed - user not found'
+                        continue
+                        
+                    # Create and send the DM
+                    dm_embed = discord.Embed(
+                        title="Matcherino Username Format Update Required",
+                        description=f"Hello! We noticed your Matcherino username format needs to be updated for proper matching in our tournament system.",
+                        color=discord.Color.blue()
+                    )
+                    
+                    # Add warning message at the top
+                    dm_embed.add_field(
+                        name="⚠️ IMPORTANT WARNING ⚠️",
+                        value="**❗ Users with improperly formatted usernames will be automatically UNREGISTERED from both Discord and Matcherino systems ❗**\n\n🚫 This will PREVENT your participation in the tournament\n\n⏰ Please update your username format IMMEDIATELY to avoid removal",
+                        inline=False
+                    )
+                    
+                    dm_embed.add_field(
+                        name="Your current Matcherino username",
+                        value=f"`{matcherino_username}`",
+                        inline=False
+                    )
+                    
+                    dm_embed.add_field(
+                        name="Please update to this format",
+                        value=f"`{suggested_format}`",
+                        inline=False
+                    )
+                    
+                    # Add different messages based on whether we found their ID
+                    dm_embed.add_field(
+                        name="Verify your user ID" if has_user_id else "Find your user ID",
+                        value=id_info_message,
+                        inline=False
+                    )
+                    
+                    dm_embed.add_field(
+                        name="How to update",
+                        value=f"Use the `/register` command with your corrected username:\n`/register {suggested_format}`",
+                        inline=False
+                    )
+                    
+                    # Add footer with disclaimer
+                    dm_embed.set_footer(text="This message was sent from Secondbest Server as you registered for the tournament.")
+                    
+                    await discord_user.send(embed=dm_embed)
+                    success_count += 1
+                    entry['status'] = 'success'
+                    logger.info(f"Sent username reminder to {discord_username} (ID: {user_id})")
+                        
+                    # Add delay to avoid rate limiting
+                    await asyncio.sleep(delay_seconds)
+                        
+                except discord.Forbidden:
+                    logger.warning(f"Cannot send DM to {discord_username} (ID: {user_id}) - they may have DMs closed")
+                    failed_count += 1
+                    failed_users.append(f"{discord_username} (ID: {user_id}) - DMs closed")
+                    entry['status'] = 'failed - DMs closed'
+                    
+                except Exception as e:
+                    logger.error(f"Error sending DM to {discord_username} (ID: {user_id}): {e}")
+                    failed_count += 1
+                    failed_users.append(f"{discord_username} (ID: {user_id}) - Error: {str(e)}")
+                    entry['status'] = f'failed - {str(e)}'
+            
+            # Update backup CSV after each batch
+            try:
+                # First read all existing entries
+                all_entries = []
+                with open(backup_filename, 'r', newline='', encoding='utf-8') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    all_entries = list(reader)
+                    
+                # Update status for entries that were processed
+                for i, entry in enumerate(users_to_process[:batch_end]):
+                    user = entry['user']
+                    user_id = str(user['user_id'])
+                    
+                    # Find corresponding entry in original list
+                    for original_entry in all_entries:
+                        if original_entry['discord_id'] == user_id:
+                            original_entry['status'] = entry['status']
+                            break
+                            
+                # Write updated entries back to file
+                with open(backup_filename, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['discord_id', 'discord_username', 'matcherino_username', 'suggested_format', 'status']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(all_entries)
+                    
+                logger.info(f"Updated backup file after batch {batch_index+1}")
+                
+            except Exception as e:
+                logger.error(f"Error updating backup file: {e}")
+                # Continue processing even if backup update fails
+        
+        # Create final result embed
+        result_embed = discord.Embed(
+            title="Username Reminder Continuation Results",
+            description=f"Processed {len(users_to_process)} remaining users from backup file",
+            color=discord.Color.green() if failed_count == 0 else discord.Color.orange(),
+            timestamp=datetime.datetime.utcnow()
+        )
+        
+        result_embed.add_field(
+            name="Summary",
+            value=f"✅ Successfully sent: **{success_count}** reminders\n❌ Failed to send: **{failed_count}** reminders",
+            inline=False
+        )
+        
+        # Add batch processing details
+        result_embed.add_field(
+            name="Processing Details",
+            value=f"⏱️ Delay between messages: **{delay_seconds}s**\n"
+                  f"📊 Batch size: **{batch_size}** users\n"
+                  f"📋 Backup file: `{backup_filename}`",
+            inline=False
+        )
+        
+        # If there were failures, add them to the embed
+        if failed_users:
+            # Truncate the list if it's too long for Discord
+            failure_text = "\n".join(failed_users[:10])
+            if len(failed_users) > 10:
+                failure_text += f"\n... and {len(failed_users) - 10} more"
+                
+            result_embed.add_field(
+                name="Failed Reminders",
+                value=failure_text,
+                inline=False
+            )
+        
+        # Send final results - Try interaction first, fall back to channel message
+        try:
+            await interaction.followup.send(embed=result_embed, ephemeral=True)
+        except discord.HTTPException as e:
+            # If the interaction token expired, send directly to the channel
+            if status_channel:
+                # Only send if we have a channel reference
+                await status_channel.send(
+                    content=f"Final results for {interaction.user.mention}'s username reminder continuation:",
+                    embed=result_embed
+                )
+            logger.error(f"Could not send results via interaction followup: {e}")
+        
+        # Update any existing status message to show completion
+        if status_message:
+            try:
+                await status_message.edit(
+                    content=f"✅ **COMPLETED**: {interaction.user.mention}'s username reminder continuation finished!",
+                    embed=result_embed
+                )
+            except Exception as e:
+                logger.error(f"Error updating final status message: {e}")
+        
+    except Exception as e:
+        logger.error(f"Error in continue-username-reminders command: {e}", exc_info=True)
+        
+        # Try to send error message through followup first
+        try:
+            await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+        except Exception as followup_error:
+            # If that fails, try to send directly to the channel
+            if interaction.channel:
+                await interaction.channel.send(
+                    f"{interaction.user.mention} An error occurred while continuing username reminders: {str(e)}"
+                )
+            logger.error(f"Failed to send error message via followup: {followup_error}")
 
 async def main():
     """Main function to run the bot."""
