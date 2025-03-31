@@ -1484,7 +1484,7 @@ async def send_username_reminders_command(interaction: discord.Interaction, conf
                     # Add warning message at the top
                     dm_embed.add_field(
                         name="⚠️ IMPORTANT WARNING ⚠️",
-                        value="**❗ Users with improperly formatted usernames will be automatically UNREGISTERED from both Discord and Matcherino systems ❗**\n\n🚫 This will PREVENT your participation in the tournament\n\n⏰ Please update your username format IMMEDIATELY to avoid removal",
+                        value="**❗ Users with improperly formatted usernames will be automatically UNREGISTERED from both Discord and Matcherino systems ❗**\n\n🚫 This will PREVENT your participation in the tournament\n\n⏰ Please update your username format IMMEDIATELY to avoid removal\n ‼️ You will be automatically disqualified <t:1743613200:R> if you don't update your username! ‼️",
                         inline=False
                     )
                     

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 TOURNAMENT_JOIN_CODE = "Vladilena Milize"
 
 # Controls whether new signups are allowed
-SIGNUPS_OPEN = True
+SIGNUPS_OPEN = False
 
 class Database:
     """
