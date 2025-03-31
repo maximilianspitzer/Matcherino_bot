@@ -152,6 +152,15 @@ async def register(interaction: discord.Interaction, matcherino_username: str):
         # Register the user or get existing join code
         success, join_code = await db.register_user(user_id, username, matcherino_username)
         
+        # Check if signups are closed - this is the new part
+        if success is None:
+            # Signups are closed and user is not already registered
+            await interaction.response.send_message(
+                "⛔ **Tournament signups are currently closed for new registrations.**\n\nOnly existing participants can update their Matcherino usernames at this time. Please contact an administrator for assistance.",
+                ephemeral=True
+            )
+            return
+        
         if not success and is_registered:
             await interaction.response.send_message(
                 f"Your Matcherino username has been updated to: **{matcherino_username}**\n\nThe tournament join code is: **`{join_code}`**\n\nUse this code when registering on Matcherino to verify your participation.", 
