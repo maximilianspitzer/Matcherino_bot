@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 # Join code for tournament - can be overridden by bot.py
 TOURNAMENT_JOIN_CODE = "Vladilena Milize"
 
+# Controls whether new signups are allowed
+SIGNUPS_OPEN = True
+
 class Database:
     """
     Database utility class for handling PostgreSQL operations.
@@ -124,8 +127,9 @@ class Database:
             matcherino_username: Optional Matcherino username
             
         Returns:
-            tuple: (success, join_code) where success is True if registration was successful
-                  and join_code is the fixed code for Matcherino registration
+            tuple: (success, join_code) where success is True if registration was successful,
+                  False if user was already registered, or None if signups are closed.
+                  join_code is the fixed code for Matcherino registration
         """
         # Fixed join code for all users comes from instance variable
         
@@ -147,6 +151,11 @@ class Database:
                         logger.info(f"Updated Matcherino username for user {username} ({user_id}) to {matcherino_username}")
                     
                     return (False, self.join_code)
+                
+                # Check if signups are closed
+                if not SIGNUPS_OPEN:
+                    logger.info(f"Rejected new signup for {username} ({user_id}) - signups are closed")
+                    return (None, None)
                 
                 # Register the user with the fixed join code
                 await conn.execute(

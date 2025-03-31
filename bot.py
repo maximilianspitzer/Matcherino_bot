@@ -1197,6 +1197,41 @@ async def match_free_agents_command(interaction: discord.Interaction):
         logger.error(f"Error matching free agents: {e}", exc_info=True)
         await interaction.followup.send(f"An error occurred while matching free agents: {str(e)}", ephemeral=True)
 
+@bot.tree.command(
+    name="close-signups", 
+    description="Admin command to toggle whether new signups are allowed", 
+    guild=discord.Object(id=TARGET_GUILD_ID)
+)
+@app_commands.default_permissions(administrator=True)
+async def close_signups_command(interaction: discord.Interaction):
+    """Admin command to toggle whether new signups are allowed.
+    When signups are closed, existing users can still update their Matcherino usernames."""
+    try:
+        # Toggle the signups status
+        from db import SIGNUPS_OPEN
+        import db as db_module
+        
+        # Toggle the value
+        db_module.SIGNUPS_OPEN = not SIGNUPS_OPEN
+        
+        if SIGNUPS_OPEN:
+            status_message = "Signups are now **CLOSED**. New users cannot register, but existing users can still update their Matcherino usernames."
+            logger.info(f"Admin {interaction.user.name} ({interaction.user.id}) closed tournament signups")
+        else:
+            status_message = "Signups are now **OPEN**. New users can register for the tournament."
+            logger.info(f"Admin {interaction.user.name} ({interaction.user.id}) opened tournament signups")
+        
+        await interaction.response.send_message(
+            f"{status_message}\n\nCurrent status: **{'OPEN' if db_module.SIGNUPS_OPEN else 'CLOSED'}**", 
+            ephemeral=True
+        )
+            
+    except Exception as e:
+        logger.error(f"Error in close-signups command: {e}", exc_info=True)
+        await interaction.response.send_message("An error occurred while toggling signup status.", ephemeral=True)
+
+
+
 
 @bot.tree.command(
     name="send-username-reminders", 
