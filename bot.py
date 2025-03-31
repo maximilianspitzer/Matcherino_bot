@@ -1395,7 +1395,6 @@ async def send_username_reminders_command(interaction: discord.Interaction, conf
             # Continue processing anyway
         
         # Create a message directly in the channel for status updates
-        # that can be edited even after the interaction expires
         status_channel = interaction.channel
         status_message = None
         
@@ -1415,7 +1414,7 @@ async def send_username_reminders_command(interaction: discord.Interaction, conf
             
             logger.info(f"Processing batch {batch_index + 1}/{total_batches} ({len(current_batch)} users)")
             
-            # Update status message every batch
+            # Update status message periodically
             if batch_index > 0 and batch_index % 2 == 0:  # Update every 2 batches to reduce API calls
                 progress = (batch_start / total_users) * 100
                 progress_embed = discord.Embed(
@@ -1435,13 +1434,11 @@ async def send_username_reminders_command(interaction: discord.Interaction, conf
                 # Create or update status message
                 try:
                     if status_message is None and status_channel:
-                        # First time creating the message (only for admins)
                         status_message = await status_channel.send(
                             content=f"Status update for {interaction.user.mention}'s username reminder command:",
                             embed=progress_embed
                         )
                     elif status_message:
-                        # Update existing message
                         await status_message.edit(embed=progress_embed)
                 except Exception as e:
                     logger.error(f"Error updating status message: {e}")
@@ -1512,7 +1509,7 @@ async def send_username_reminders_command(interaction: discord.Interaction, conf
                     
                     dm_embed.add_field(
                         name="How to update",
-                        value=f"Use the `/register` command with your corrected username:\n`/register {proper_format}`",
+                        value=f"Use the `/register` command with your corrected username:\n`/register {proper_format}`\nRemember: You are supposed to edit your matcherino username on discord, not on matcherino.com!",
                         inline=False
                     )
                     
@@ -1538,31 +1535,35 @@ async def send_username_reminders_command(interaction: discord.Interaction, conf
                     failed_count += 1
                     failed_users.append(f"{discord_username} (ID: {user_id}) - Error: {str(e)}")
                     entry['status'] = f'failed - {str(e)}'
-        
-        # Update backup CSV with final status
-        with open(backup_filename, 'w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ['discord_id', 'discord_username', 'matcherino_username', 'suggested_format', 'status']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
             
-            for entry in users_needing_reminders:
-                user = entry['user']
-                participant = entry['participant']
-                
-                if participant:
-                    suggested_format = f"{participant['name']}#{participant['user_id']}"
-                else:
-                    suggested_format = f"{user.get('matcherino_username', '').strip()}#userId"
+            # Update backup CSV after each batch to allow resuming if the process fails
+            try:
+                with open(backup_filename, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['discord_id', 'discord_username', 'matcherino_username', 'suggested_format', 'status']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
                     
-                writer.writerow({
-                    'discord_id': user.get('user_id', ''),
-                    'discord_username': user.get('username', ''),
-                    'matcherino_username': user.get('matcherino_username', '').strip(),
-                    'suggested_format': suggested_format,
-                    'status': entry.get('status', 'unknown')
-                })
+                    for entry in users_needing_reminders:
+                        user = entry['user']
+                        participant = entry['participant']
+                        
+                        if participant:
+                            suggested_format = f"{participant['name']}#{participant['user_id']}"
+                        else:
+                            suggested_format = f"{user.get('matcherino_username', '').strip()}#userId"
+                            
+                        writer.writerow({
+                            'discord_id': user.get('user_id', ''),
+                            'discord_username': user.get('username', ''),
+                            'matcherino_username': user.get('matcherino_username', '').strip(),
+                            'suggested_format': suggested_format,
+                            'status': entry.get('status', 'unknown')
+                        })
                 
-        logger.info(f"Updated backup file with final status: {backup_filename}")
+                logger.info(f"Updated backup file after batch {batch_index+1}")
+            except Exception as e:
+                logger.error(f"Error updating backup file: {e}")
+                # Continue processing even if backup file update fails
         
         # Create final result embed
         result_embed = discord.Embed(
