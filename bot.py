@@ -633,11 +633,19 @@ async def my_team_command(interaction: discord.Interaction):
             timestamp=datetime.datetime.utcnow()
         )
         
-        # Add members to the embed
+        # Add members to the embed with Discord mentions
         member_list = ""
         for member in team_info['members']:
             is_you = " (You)" if str(member.get('discord_user_id', "")) == str(user_id) else ""
-            discord_user = f" (Discord: {member['discord_username']})" if member.get('discord_username') else ""
+            
+            # Format the member info - use mention if discord_user_id exists
+            if member.get('discord_user_id'):
+                discord_user = f" (<@{member['discord_user_id']}>)"
+            elif member.get('discord_username'):
+                discord_user = f" (Discord: {member['discord_username']})"
+            else:
+                discord_user = ""
+                
             member_list += f"• {member['member_name']}{discord_user}{is_you}\n"
             
         embed.add_field(
