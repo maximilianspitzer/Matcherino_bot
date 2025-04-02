@@ -601,11 +601,26 @@ async def my_team_command(interaction: discord.Interaction):
             )
             return
         
+        # Get the user's registered Matcherino username
+        matcherino_username = await db.get_matcherino_username(user_id)
+        if not matcherino_username:
+            await interaction.followup.send(
+                "You haven't registered your Matcherino username yet. Please use `/register <matcherino_username>` to set your username.",
+                ephemeral=True
+            )
+            return
+            
+        # Get user's team information
         team_info = await db.get_user_team(user_id)
         
         if not team_info:
             await interaction.followup.send(
-                "You are not currently assigned to any team. Make sure you've registered with your Matcherino username using the /register command.",
+                f"You are not currently assigned to any team. Your registered Matcherino username is **{matcherino_username}**.\n\n"
+                "Possible reasons:\n"
+                "1. You haven't joined a team on Matcherino yet\n"
+                "2. Your Matcherino username doesn't match what's in the database\n"
+                "3. Teams haven't been synced recently\n\n"
+                "Please verify your username with `/verify-username` or ask an admin to run `/sync-teams`.",
                 ephemeral=True
             )
             return
@@ -621,7 +636,7 @@ async def my_team_command(interaction: discord.Interaction):
         # Add members to the embed
         member_list = ""
         for member in team_info['members']:
-            is_you = " (You)" if str(member.get('discord_id', "")) == str(user_id) else ""
+            is_you = " (You)" if str(member.get('discord_user_id', "")) == str(user_id) else ""
             discord_user = f" (Discord: {member['discord_username']})" if member.get('discord_username') else ""
             member_list += f"• {member['member_name']}{discord_user}{is_you}\n"
             
@@ -631,6 +646,10 @@ async def my_team_command(interaction: discord.Interaction):
             inline=False
         )
         
+        # Add footer with last sync time
+        if 'last_updated' in team_info:
+            embed.set_footer(text=f"Team data last updated: {team_info['last_updated'].strftime('%Y-%m-%d %H:%M:%S UTC')}")
+            
         await interaction.followup.send(embed=embed, ephemeral=True)
         
     except Exception as e:

@@ -141,6 +141,9 @@ class MatcherinoScraper:
                     # Get team name, with fallback
                     team_name = team.get('name', 'Unknown Team')
                     
+                    # Get the correct team ID (use id field directly from the team object)
+                    team_id = team.get('id')
+                    
                     # Extract team members - checking both 'members' and possibly nested 'team.members'
                     members = []
                     
@@ -149,6 +152,14 @@ class MatcherinoScraper:
                         for member in team['members']:
                             if 'displayName' in member:
                                 display_name = member['displayName'].strip()
+                                # Get the correct bountyTeamId from the member if present
+                                bounty_team_id = member.get('bountyTeamId', None)
+                                
+                                # If bountyTeamId is present on the member, use it to verify team matching
+                                if bounty_team_id is not None and bounty_team_id != team_id:
+                                    # If bountyTeamId doesn't match team.id, log it but still include the member
+                                    logger.info(f"Member {display_name} has bountyTeamId {bounty_team_id} that doesn't match team.id {team_id}")
+                                
                                 members.append({
                                     'name': display_name,
                                     'user_id': member.get('userId', ''),
@@ -179,8 +190,8 @@ class MatcherinoScraper:
                         'name': team_name,
                         'members': member_names,
                         'members_data': members,  # Full member data
-                        'team_id': team.get('id') or (team.get('team', {}) or {}).get('id', None),
-                        'bounty_team_id': team.get('bountyTeamId', None),
+                        'team_id': team_id,  # Use the direct team ID
+                        'bounty_team_id': team.get('id'),  # Store the ID in a separate field as well
                         'created_at': team.get('createdAt', None),
                         'raw_data': team  # Include the raw data for debugging/future use
                     })

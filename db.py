@@ -258,6 +258,9 @@ class Database:
                     # Process each team
                     for team in teams_data:
                         team_name = team['name']
+                        team_id_from_api = team.get('team_id')  # Use API-provided team ID
+                        
+                        logger.info(f"Processing team: {team_name} (ID from API: {team_id_from_api})")
                         
                         # Insert or update team
                         team_id = await conn.fetchval(
@@ -279,15 +282,13 @@ class Database:
                         
                         # Insert team members
                         if team.get('members'):
+                            matched_count = 0
                             for member_name in team['members']:
-                                # Try to find matching Discord user
-                                discord_user_id = await conn.fetchval(
-                                    """
-                                    SELECT user_id FROM registrations 
-                                    WHERE matcherino_username = $1
-                                    """,
-                                    member_name
-                                )
+                                # Try to find matching Discord user with various matching strategies
+                                discord_user_id = await self._find_discord_user_for_member(conn, member_name)
+                                
+                                if discord_user_id:
+                                    matched_count += 1
                                 
                                 # Insert team member with Discord user ID if found
                                 await conn.execute(
@@ -298,12 +299,39 @@ class Database:
                                     """,
                                     team_id, member_name, discord_user_id
                                 )
+                            
+                            logger.info(f"Team {team_name}: matched {matched_count}/{len(team['members'])} members to Discord users")
             
             logger.info(f"Successfully updated {len(teams_data)} teams in database")
         except Exception as e:
             logger.error(f"Error updating Matcherino teams in database: {e}")
             raise
     
+    async def _find_discord_user_for_member(self, conn, member_name):
+        """
+        Helper method to find a Discord user ID for a Matcherino member name using
+        exact matching only.
+        
+        Args:
+            conn: Database connection
+            member_name: The member name from the Matcherino API
+            
+        Returns:
+            int: Discord user ID if found, None otherwise
+        """
+        # Only use exact match on matcherino_username
+        discord_user_id = await conn.fetchval(
+            "SELECT user_id FROM registrations WHERE matcherino_username = $1",
+            member_name
+        )
+        
+        if discord_user_id:
+            return discord_user_id
+        
+        # No match found
+        logger.info(f"No Discord user match found for Matcherino member: {member_name}")
+        return None
+
     async def get_matcherino_teams(self, active_only=True):
         """
         Get all teams from the database with their members.
@@ -394,7 +422,7 @@ class Database:
                 # Get team for this user
                 team = await conn.fetchrow(
                     """
-                    SELECT t.*, tm.member_name
+                    SELECT t.team_id, t.team_name, t.last_updated
                     FROM matcherino_teams t
                     JOIN team_members tm ON t.team_id = tm.team_id
                     WHERE tm.discord_user_id = $1 AND t.is_active = TRUE
@@ -405,21 +433,27 @@ class Database:
                 if not team:
                     return None
                     
-                # Get all teammates
-                teammates = await conn.fetch(
+                # Get all members of the team, including the user
+                members = await conn.fetch(
                     """
                     SELECT tm.member_name, tm.discord_user_id, r.username AS discord_username
                     FROM team_members tm
                     LEFT JOIN registrations r ON tm.discord_user_id = r.user_id
-                    WHERE tm.team_id = $1 AND tm.discord_user_id != $2
-                    ORDER BY tm.member_name
+                    WHERE tm.team_id = $1
+                    ORDER BY 
+                        CASE WHEN tm.discord_user_id = $2 THEN 0 ELSE 1 END,
+                        tm.member_name
                     """,
                     team['team_id'], user_id
                 )
                 
                 # Convert to dictionary
-                result = dict(team)
-                result['teammates'] = [dict(teammate) for teammate in teammates]
+                result = {
+                    'team_id': team['team_id'],
+                    'team_name': team['team_name'],
+                    'last_updated': team['last_updated'],
+                    'members': [dict(member) for member in members]
+                }
                 
                 return result
         except Exception as e:
