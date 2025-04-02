@@ -1,7 +1,7 @@
 """
 Matcherino Scraper - Tournament Team Information
 
-This module provides functionality to scrape team information from Matcherino tournament pages.
+This module provides functionality to retrieve team information from Matcherino tournaments.
 It extracts team names, member usernames, and other relevant information to integrate
 with the Discord bot registration system.
 """
@@ -12,8 +12,6 @@ import logging
 import asyncio
 import aiohttp
 from typing import Dict, List, Optional, Any
-from bs4 import BeautifulSoup
-import re
 from dotenv import load_dotenv
 from datetime import datetime
 
@@ -37,11 +35,11 @@ DEFAULT_TOURNAMENT_ID = os.getenv("MATCHERINO_TOURNAMENT_ID")
 
 class MatcherinoScraper:
     """
-    Class for scraping team information from Matcherino tournament pages.
+    Class for retrieving team information from Matcherino tournaments using the API.
     
     This scraper can:
-    1. Navigate to tournament pages
-    2. Extract team information including names and member usernames
+    1. Retrieve team information including names and member usernames
+    2. Get tournament participant data
     3. Handle errors gracefully and provide robust data extraction
     """
     
@@ -77,171 +75,9 @@ class MatcherinoScraper:
             await self.session.close()
             self.session = None
     
-    async def get_tournament_page(self, tournament_id: str) -> Optional[str]:
-        """
-        Get the HTML content of a tournament page.
-        
-        Args:
-            tournament_id (str): The ID of the tournament to fetch
-            
-        Returns:
-            Optional[str]: HTML content of the tournament page if successful, None otherwise
-        """
-        if not self.session:
-            await self.create_session()
-        
-        url = f"{MATCHERINO_BASE_URL}{MATCHERINO_TOURNAMENT_PATH}{tournament_id}"
-        logger.info(f"Fetching tournament page: {url}")
-        
-        try:
-            async with self.session.get(url) as response:
-                if response.status == 200:
-                    html_content = await response.text()
-                    logger.info(f"Successfully retrieved tournament page: {url}")
-                    return html_content
-                
-                logger.error(f"Failed to fetch tournament page. Status: {response.status}")
-                return None
-                
-        except aiohttp.ClientError as e:
-            logger.error(f"Error fetching tournament page: {e}")
-            return None
-    
-    async def _get_teams(self, teams_page_url: str) -> List[Dict[str, Any]]:
-        """
-        Extract team information from the teams page URL.
-        
-        Args:
-            teams_page_url (str): URL of the teams page
-            
-        Returns:
-            List[Dict[str, Any]]: List of dictionaries containing team information
-        """
-        try:
-            # Get the HTML content
-            async with self.session.get(teams_page_url) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to get teams page. Status: {response.status}")
-                    return []
-                
-                html_content = await response.text()
-            
-            # Parse the HTML content
-            soup = BeautifulSoup(html_content, 'html.parser')
-            
-            # Teams data will be stored here
-            teams_data = []
-            
-            # First, try to find the participant data in script tags
-            logger.info("Looking for participant data in script tags...")
-            scripts = soup.find_all('script')
-            
-            # This will hold all participants found in script tags
-            participants_from_json = []
-            
-            for script in scripts:
-                if script.string and ('participant' in script.string.lower() or 'player' in script.string.lower() or 'team' in script.string.lower()):
-                    # Try to extract full participant data using regex
-                    try:
-                        # Look for complete participant JSON objects
-                        participant_data_pattern = r'\{"id":\d+,"bountyId":\d+,"name":"([^"]+)"[^}]*"team":\{"id":\d+,"name":"([^"]+)"'
-                        participant_matches = re.findall(participant_data_pattern, script.string)
-                        
-                        if participant_matches:
-                            logger.info(f"Found {len(participant_matches)} participant-team pairs in script")
-                            for participant_name, team_name in participant_matches:
-                                participants_from_json.append({
-                                    'name': participant_name,
-                                    'team': team_name
-                                })
-                        else:
-                            # If we couldn't find paired data, look for individual participant names
-                            participant_pattern = r'\{"id":\d+,"bountyId":\d+,"name":"([^"]+)"'
-                            participant_matches = re.findall(participant_pattern, script.string)
-                            
-                            if participant_matches:
-                                logger.info(f"Found {len(participant_matches)} participants in script")
-                                for name in participant_matches:
-                                    participants_from_json.append({
-                                        'name': name,
-                                        'team': 'Individual Participant'  # Default team name
-                                    })
-                            
-                            # Separately look for team information
-                            team_pattern = r'"team":\{"id":\d+,"name":"([^"]+)"'
-                            team_matches = re.findall(team_pattern, script.string)
-                            if team_matches:
-                                logger.info(f"Found {len(team_matches)} team references in script")
-                                # Update the team names for participants if possible
-                                for i, team_name in enumerate(team_matches):
-                                    if i < len(participants_from_json):
-                                        participants_from_json[i]['team'] = team_name
-                    except Exception as e:
-                        logger.error(f"Error parsing participant data: {e}")
-            
-            # If we found participants via JSON, group them by team
-            if participants_from_json:
-                # Group participants by team
-                teams_by_name = {}
-                for participant in participants_from_json:
-                    team_name = participant.get('team', 'Individual Participant')
-                    if team_name not in teams_by_name:
-                        teams_by_name[team_name] = {
-                            'name': team_name,
-                            'members': []
-                        }
-                    teams_by_name[team_name]['members'].append(participant['name'])
-                
-                # Convert to list
-                teams_data = list(teams_by_name.values())
-                logger.info(f"Successfully extracted {len(teams_data)} teams with {len(participants_from_json)} participants total")
-                return teams_data
-            
-            # If we didn't find data in scripts, try the HTML approach
-            logger.info("No participants found in scripts, trying HTML elements...")
-            
-            # Look for the specific team section header with "Qualified" text
-            team_section_header = soup.find('div', class_='team-section-header')
-            
-            if team_section_header and 'Qualified' in team_section_header.text:
-                logger.info(f"Found team section header: {team_section_header.text.strip()}")
-                
-                # Get the parent container or next sibling that contains the teams
-                team_container = team_section_header.parent
-                
-                # Find all team/participant elements in this container
-                participant_elements = team_container.find_all('div', class_=lambda c: c and ('team-' in c or 'participant-' in c or 'player-' in c))
-                
-                if not participant_elements:
-                    # If we can't find with specific classes, try to find all child divs
-                    participant_elements = team_container.find_all('div', recursive=False)
-                
-                logger.info(f"Found {len(participant_elements)} potential participant elements")
-                
-                # Process each participant element
-                for elem in participant_elements:
-                    # Try to extract the participant name
-                    name_elem = elem.find(['h3', 'h4', 'div', 'span'], class_=lambda c: c and ('name' in c or 'title' in c))
-                    
-                    if name_elem:
-                        participant_name = name_elem.text.strip()
-                        logger.info(f"Found participant: {participant_name}")
-                        
-                        # For individual participants in a tournament without teams
-                        teams_data.append({
-                            'name': 'Individual Participants',
-                            'members': [participant_name]
-                        })
-            
-            return teams_data
-            
-        except Exception as e:
-            logger.error(f"Error parsing tournament page: {e}")
-            return []
-    
     async def get_teams_data(self, tournament_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Get teams data for a specific tournament.
+        Get teams data for a specific tournament using the Matcherino API.
         
         Args:
             tournament_id (str, optional): The tournament ID. Defaults to environment variable.
@@ -261,14 +97,68 @@ class MatcherinoScraper:
         logger.info(f"Fetching teams data for tournament: {tournament_id}")
         
         try:
-            # Get the teams page
-            teams_page_url = f"{MATCHERINO_BASE_URL}{MATCHERINO_TOURNAMENT_PATH}{tournament_id}/teams"
-            teams_data = await self._get_teams(teams_page_url)
+            # API endpoint for getting bounty data
+            api_url = "https://api.matcherino.com/__api/bounties/findById"
             
-            return teams_data
+            # Parameters for the request
+            params = {
+                "id": 0,  # This will be ignored when shortlink is provided
+                "shortlink": tournament_id
+            }
             
+            # API-specific headers
+            api_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Origin": "https://matcherino.com",
+                "Referer": f"https://matcherino.com/t/{tournament_id}",
+            }
+            
+            logger.info(f"Requesting team data from API: {api_url} for tournament: {tournament_id}")
+            
+            # Make the API request
+            async with self.session.get(api_url, params=params, headers=api_headers) as response:
+                if response.status != 200:
+                    logger.error(f"Failed to fetch team data from API. Status: {response.status}")
+                    return []
+                
+                # Parse the JSON response
+                data = await response.json()
+                
+                # Check if the response contains team data
+                if 'body' not in data or 'teams' not in data['body']:
+                    logger.error("API response doesn't contain team data")
+                    return []
+                
+                # Extract teams data
+                teams_raw = data['body']['teams']
+                logger.info(f"Successfully retrieved {len(teams_raw)} teams from API")
+                
+                # Format the team data to match the expected structure
+                teams_data = []
+                for team in teams_raw:
+                    team_name = team.get('name', 'Unknown Team')
+                    
+                    # Extract team members
+                    members = []
+                    if 'participants' in team and isinstance(team['participants'], list):
+                        for participant in team['participants']:
+                            if 'displayName' in participant:
+                                members.append(participant['displayName'])
+                    
+                    teams_data.append({
+                        'name': team_name,
+                        'members': members,
+                        'team_id': team.get('id', None),  # Include team ID if available
+                        'raw_data': team  # Include the raw data for debugging/future use
+                    })
+                
+                logger.info(f"Successfully processed {len(teams_data)} teams with {sum(len(t['members']) for t in teams_data)} total members")
+                return teams_data
+                
         except Exception as e:
-            logger.error(f"Error fetching teams data: {e}")
+            logger.error(f"Error fetching teams data from API: {e}", exc_info=True)
             return []
     
     async def get_tournament_participants(self, tournament_id: str) -> List[Dict[str, Any]]:
@@ -357,90 +247,6 @@ class MatcherinoScraper:
         except Exception as e:
             logger.error(f"Error getting participants from API: {e}", exc_info=True)
             return []
-    
-    async def get_bounty_id(self, tournament_id: str) -> Optional[str]:
-        """
-        Extract the bountyId from the tournament page.
-        
-        Args:
-            tournament_id (str): The tournament ID from the URL
-            
-        Returns:
-            Optional[str]: The extracted bountyId or None if not found
-        """
-        if not self.session:
-            await self.create_session()
-        
-        url = f"{MATCHERINO_BASE_URL}{MATCHERINO_TOURNAMENT_PATH}{tournament_id}"
-        logger.info(f"Fetching tournament page to extract bountyId: {url}")
-        
-        try:
-            async with self.session.get(url) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to fetch tournament page. Status: {response.status}")
-                    # Fallback to using tournament_id as bounty_id
-                    logger.info(f"Falling back to using tournament ID as bountyId: {tournament_id}")
-                    return tournament_id
-                
-                html_content = await response.text()
-                
-                # For debugging, log a small sample of the HTML content
-                content_sample = html_content[:200] + "..." if len(html_content) > 200 else html_content
-                logger.debug(f"HTML content sample: {content_sample}")
-                
-                # Search for bountyId in script tags using regex patterns
-                # Pattern 1: Look for bountyId in JSON data
-                pattern1 = r'"bountyId":\s*(\d+)'
-                match = re.search(pattern1, html_content)
-                if match:
-                    bounty_id = match.group(1)
-                    logger.info(f"Successfully extracted bountyId: {bounty_id}")
-                    return bounty_id
-                
-                # Pattern 2: Look for bounty ID in API calls or object definitions
-                pattern2 = r'bounty["\']?\s*:\s*["\']?(\d+)'
-                match = re.search(pattern2, html_content, re.IGNORECASE)
-                if match:
-                    bounty_id = match.group(1)
-                    logger.info(f"Successfully extracted bountyId (pattern 2): {bounty_id}")
-                    return bounty_id
-                
-                # Pattern 3: Look for ID in URL parameters in script
-                pattern3 = r'bountyId=(\d+)'
-                match = re.search(pattern3, html_content)
-                if match:
-                    bounty_id = match.group(1)
-                    logger.info(f"Successfully extracted bountyId (pattern 3): {bounty_id}")
-                    return bounty_id
-                
-                # Pattern 4: Look for tiers with bounty ID
-                pattern4 = r'tiers":\s*\[\s*{\s*"bountyId":\s*(\d+)'
-                match = re.search(pattern4, html_content)
-                if match:
-                    bounty_id = match.group(1)
-                    logger.info(f"Successfully extracted bountyId (pattern 4): {bounty_id}")
-                    return bounty_id
-                    
-                # Pattern 5: Look for bounty ID in data attributes
-                pattern5 = r'data-bounty-id=["\']?(\d+)'
-                match = re.search(pattern5, html_content, re.IGNORECASE)
-                if match:
-                    bounty_id = match.group(1)
-                    logger.info(f"Successfully extracted bountyId (pattern 5): {bounty_id}")
-                    return bounty_id
-                
-                # If we get here, we couldn't find the bountyId in the HTML
-                logger.warning("Could not extract bountyId from tournament page HTML")
-                
-                # As a last resort, try to use the tournament ID itself as fallback
-                logger.info(f"Falling back to using tournament ID as bountyId: {tournament_id}")
-                return tournament_id
-                
-        except Exception as e:
-            logger.error(f"Error extracting bountyId from tournament page: {e}")
-            # Fallback to tournament ID if any error occurs
-            logger.info(f"Error occurred, falling back to using tournament ID as bountyId: {tournament_id}")
-            return tournament_id
 
 
 async def test_scraper(tournament_id: Optional[str] = None):
