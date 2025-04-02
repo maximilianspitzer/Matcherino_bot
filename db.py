@@ -241,7 +241,7 @@ class Database:
         
         Args:
             teams_data: List of dictionaries containing team information
-                        Each team should have 'name' and 'members' keys
+                        Each team should have 'name', 'members', and 'member_details' keys
         """
         if not self.pool:
             await self.create_pool()
@@ -280,11 +280,36 @@ class Database:
                             team_id
                         )
                         
-                        # Insert team members
-                        if team.get('members'):
+                        # First check if we have member_details (enhanced data)
+                        if 'member_details' in team and team['member_details']:
+                            matched_count = 0
+                            for member_info in team['member_details']:
+                                display_name = member_info['display_name']
+                                formatted_username = member_info.get('formatted_username')
+                                
+                                # Try multiple matching strategies for this member
+                                discord_user_id = await self._find_discord_user_for_member(conn, display_name, formatted_username)
+                                
+                                if discord_user_id:
+                                    matched_count += 1
+                                
+                                # Insert team member with Discord user ID if found
+                                await conn.execute(
+                                    """
+                                    INSERT INTO team_members 
+                                    (team_id, member_name, discord_user_id)
+                                    VALUES ($1, $2, $3)
+                                    """,
+                                    team_id, display_name, discord_user_id
+                                )
+                            
+                            logger.info(f"Team {team_name}: matched {matched_count}/{len(team['member_details'])} members to Discord users")
+                        
+                        # Fallback to simple members list if member_details not available
+                        elif team.get('members'):
                             matched_count = 0
                             for member_name in team['members']:
-                                # Try to find matching Discord user with various matching strategies
+                                # Try to find matching Discord user
                                 discord_user_id = await self._find_discord_user_for_member(conn, member_name)
                                 
                                 if discord_user_id:
@@ -307,19 +332,31 @@ class Database:
             logger.error(f"Error updating Matcherino teams in database: {e}")
             raise
     
-    async def _find_discord_user_for_member(self, conn, member_name):
+    async def _find_discord_user_for_member(self, conn, member_name, formatted_username=None):
         """
         Helper method to find a Discord user ID for a Matcherino member name using
-        exact matching only.
+        exact matching strategies.
         
         Args:
             conn: Database connection
-            member_name: The member name from the Matcherino API
+            member_name: The display name from the Matcherino API
+            formatted_username: Optional formatted username with ID (display_name#user_id)
             
         Returns:
             int: Discord user ID if found, None otherwise
         """
-        # Only use exact match on matcherino_username
+        # Strategy 1: Try matching with formatted_username if provided
+        if formatted_username:
+            discord_user_id = await conn.fetchval(
+                "SELECT user_id FROM registrations WHERE matcherino_username = $1",
+                formatted_username
+            )
+            
+            if discord_user_id:
+                logger.info(f"Matched member via formatted username: {formatted_username}")
+                return discord_user_id
+        
+        # Strategy 2: Only use exact match on display name with matcherino_username
         discord_user_id = await conn.fetchval(
             "SELECT user_id FROM registrations WHERE matcherino_username = $1",
             member_name

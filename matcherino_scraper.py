@@ -141,60 +141,44 @@ class MatcherinoScraper:
                     # Get team name, with fallback
                     team_name = team.get('name', 'Unknown Team')
                     
-                    # Get the correct team ID (use id field directly from the team object)
-                    team_id = team.get('id')
-                    
-                    # Extract team members - checking both 'members' and possibly nested 'team.members'
+                    # Extract team members with both displayName and userId
                     members = []
+                    member_details = []
                     
-                    # Check for members directly in the team object
+                    # Look for members directly in the members array
                     if 'members' in team and isinstance(team['members'], list):
                         for member in team['members']:
+                            # Extract displayName
                             if 'displayName' in member:
                                 display_name = member['displayName'].strip()
-                                # Get the correct bountyTeamId from the member if present
-                                bounty_team_id = member.get('bountyTeamId', None)
+                                user_id = member.get('userId', '')
                                 
-                                # If bountyTeamId is present on the member, use it to verify team matching
-                                if bounty_team_id is not None and bounty_team_id != team_id:
-                                    # If bountyTeamId doesn't match team.id, log it but still include the member
-                                    logger.info(f"Member {display_name} has bountyTeamId {bounty_team_id} that doesn't match team.id {team_id}")
+                                # Add member to the list
+                                members.append(display_name)
                                 
-                                members.append({
-                                    'name': display_name,
-                                    'user_id': member.get('userId', ''),
+                                # Create a detailed member record
+                                member_details.append({
+                                    'display_name': display_name,
+                                    'user_id': user_id,
                                     'auth_id': member.get('authId', ''),
                                     'auth_provider': member.get('authProvider', ''),
                                     'is_captain': member.get('captain', False),
-                                    'game_username': member.get('participantInfo', {}).get('gameUsername', '')
+                                    'game_username': member.get('participantInfo', {}).get('gameUsername', ''),
+                                    'formatted_username': f"{display_name}#{user_id}" if user_id else display_name
                                 })
                     
-                    # If no members found and there's a nested team structure, check there
-                    if not members and 'team' in team and isinstance(team['team'], dict) and 'members' in team['team']:
-                        for member in team['team']['members']:
-                            if 'displayName' in member:
-                                display_name = member['displayName'].strip()
-                                members.append({
-                                    'name': display_name,
-                                    'user_id': member.get('userId', ''),
-                                    'auth_id': member.get('authId', ''),
-                                    'auth_provider': member.get('authProvider', ''),
-                                    'is_captain': member.get('captain', False),
-                                    'game_username': ''  # No game username in this structure
-                                })
-                    
-                    # Format for compatibility with existing code
-                    member_names = [member['name'] for member in members]
-                    
-                    teams_data.append({
-                        'name': team_name,
-                        'members': member_names,
-                        'members_data': members,  # Full member data
-                        'team_id': team_id,  # Use the direct team ID
-                        'bounty_team_id': team.get('id'),  # Store the ID in a separate field as well
-                        'created_at': team.get('createdAt', None),
-                        'raw_data': team  # Include the raw data for debugging/future use
-                    })
+                    # Add the team if it has members
+                    if members:
+                        teams_data.append({
+                            'name': team_name,
+                            'members': members,  # Simple list of display names for backward compatibility
+                            'member_details': member_details,  # Detailed member info including user IDs
+                            'team_id': team.get('id'),
+                            'raw_data': team  # Include the raw data for debugging
+                        })
+                        logger.info(f"Team '{team_name}' has {len(members)} members: {', '.join(members)}")
+                    else:
+                        logger.warning(f"Team '{team_name}' has no members or couldn't extract member information")
                 
                 logger.info(f"Successfully processed {len(teams_data)} teams with {sum(len(t['members']) for t in teams_data)} total members")
                 return teams_data

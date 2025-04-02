@@ -1445,6 +1445,118 @@ async def verify_username_command(interaction: discord.Interaction):
         await interaction.followup.send(f"An error occurred while verifying your username: {str(e)}", ephemeral=True)
 
 
+@bot.tree.command(
+    name="debug-team-match", 
+    description="Debug team matching issues by showing how usernames are stored vs what's coming from the API",
+    guild=discord.Object(id=TARGET_GUILD_ID)
+)
+@app_commands.default_permissions(administrator=True)
+async def debug_team_match(interaction: discord.Interaction):
+    """Admin command to debug team matching by showing current username mapping."""
+    if not TOURNAMENT_ID:
+        await interaction.response.send_message("MATCHERINO_TOURNAMENT_ID is not set. Please set it in the .env file.", ephemeral=True)
+        return
+        
+    await interaction.response.defer(ephemeral=True)
+    
+    try:
+        # Get all registered users with Matcherino usernames
+        db_users = await db.get_all_matcherino_usernames()
+        
+        if not db_users:
+            await interaction.followup.send("No users with Matcherino usernames found in database.", ephemeral=True)
+            return
+            
+        # Get all team members from Matcherino API
+        async with MatcherinoScraper() as scraper:
+            teams_data = await scraper.get_teams_data(TOURNAMENT_ID)
+            
+            if not teams_data:
+                await interaction.followup.send("No teams found in the Matcherino tournament.", ephemeral=True)
+                return
+                
+        # Extract all unique member names from all teams
+        api_members = set()
+        for team in teams_data:
+            for member in team.get('members', []):
+                api_members.add(member)
+                
+        # Compare registered usernames with API member names
+        matched_users = []
+        unmatched_users = []
+        
+        for user in db_users:
+            matcherino_username = user.get('matcherino_username', '')
+            if matcherino_username in api_members:
+                matched_users.append(user)
+            else:
+                unmatched_users.append(user)
+                
+        # Create embed with debugging information
+        embed = discord.Embed(
+            title="Team Matching Debug Info",
+            description="Comparison of registered usernames vs API member names",
+            color=discord.Color.blue()
+        )
+        
+        # Add summary stats
+        embed.add_field(
+            name="Summary",
+            value=f"• **{len(db_users)}** users with Matcherino usernames in database\n"
+                  f"• **{len(api_members)}** team members from API\n"
+                  f"• **{len(matched_users)}** users with matching usernames\n"
+                  f"• **{len(unmatched_users)}** users with non-matching usernames",
+            inline=False
+        )
+        
+        # Add matched users (limited to avoid embed limits)
+        if matched_users:
+            matched_text = "\n".join([
+                f"• Discord: **{u['username']}** → Matcherino: `{u['matcherino_username']}`" 
+                for u in matched_users[:10]
+            ])
+            if len(matched_users) > 10:
+                matched_text += f"\n... and {len(matched_users) - 10} more"
+                
+            embed.add_field(
+                name=f"Matched Users ({len(matched_users)})",
+                value=matched_text,
+                inline=False
+            )
+            
+        # Add unmatched users (limited to avoid embed limits)
+        if unmatched_users:
+            unmatched_text = "\n".join([
+                f"• Discord: **{u['username']}** → Matcherino: `{u['matcherino_username']}`" 
+                for u in unmatched_users[:10]
+            ])
+            if len(unmatched_users) > 10:
+                unmatched_text += f"\n... and {len(unmatched_users) - 10} more"
+                
+            embed.add_field(
+                name=f"Unmatched Users ({len(unmatched_users)})",
+                value=unmatched_text,
+                inline=False
+            )
+            
+        # Add API member names (limited to avoid embed limits)
+        if api_members:
+            api_text = "\n".join([f"• `{member}`" for member in list(api_members)[:15]])
+            if len(api_members) > 15:
+                api_text += f"\n... and {len(api_members) - 15} more"
+                
+            embed.add_field(
+                name=f"API Member Names ({len(api_members)})",
+                value=api_text,
+                inline=False
+            )
+            
+        await interaction.followup.send(embed=embed, ephemeral=True)
+        
+    except Exception as e:
+        logger.error(f"Error in debug-team-match command: {e}", exc_info=True)
+        await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
 async def main():
     """Main function to run the bot."""
     try:
