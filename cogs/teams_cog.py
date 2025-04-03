@@ -275,6 +275,110 @@ class TeamsCog(commands.Cog):
             logger.error(f"Error in debug-team-match command: {e}", exc_info=True)
             await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
     
+    @app_commands.command(name="remove-unmatched", description="Remove unmatched users from database and Discord roles")
+    @app_commands.choices(category=[
+        app_commands.Choice(name="Unmatched database users", value="unmatched_db"),
+        app_commands.Choice(name="Unmatched participants", value="unmatched_participants"),
+        app_commands.Choice(name="Ambiguous matches", value="ambiguous"),
+        app_commands.Choice(name="All unmatched", value="all")
+    ])
+    @app_commands.default_permissions(administrator=True)
+    async def remove_unmatched_command(self, interaction: discord.Interaction, category: str):
+        """Remove unmatched users based on specified category"""
+        if not self.bot.TOURNAMENT_ID:
+            await interaction.response.send_message("MATCHERINO_TOURNAMENT_ID is not set.", ephemeral=True)
+            return
+            
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Get all registered users with their Matcherino usernames
+            db_users = await self.bot.db.get_all_matcherino_usernames()
+            if not db_users:
+                await interaction.followup.send("No users with Matcherino usernames found in database.", ephemeral=True)
+                return
+
+            # Get participants from Matcherino
+            from matcherino_scraper import MatcherinoScraper
+            async with MatcherinoScraper() as scraper:
+                participants = await scraper.get_tournament_participants(self.bot.TOURNAMENT_ID)
+                if not participants:
+                    await interaction.followup.send("No participants found in the Matcherino tournament.", ephemeral=True)
+                    return
+
+            # Get the Matcherino cog to use its matching function
+            matcherino_cog = self.bot.get_cog("MatcherinoCog")
+            if not matcherino_cog:
+                await interaction.followup.send("MatcherinoCog not found.", ephemeral=True)
+                return
+
+            # Match participants with database users
+            (exact_matches, name_only_matches, ambiguous_matches,
+             unmatched_participants, unmatched_db_users) = await matcherino_cog.match_participants_with_db_users(
+                 participants, db_users
+            )
+
+            users_to_remove = []
+            description = ""
+
+            # Build list of users to remove based on category
+            if category == "all":
+                # All unmatched = unmatched DB users + ambiguous matches
+                users_to_remove.extend([u["discord_id"] for u in unmatched_db_users])
+                for match in ambiguous_matches:
+                    for potential in match["potential_matches"]:
+                        users_to_remove.append(potential["discord_id"])
+                description = "Removing all unmatched users and ambiguous matches"
+            elif category == "unmatched_db":
+                users_to_remove.extend([u["discord_id"] for u in unmatched_db_users])
+                description = "Removing unmatched database users"
+            elif category == "unmatched_participants":
+                # These are in unmatched_participants but we need to find their discord IDs from db
+                participant_names = {p["name"].lower() for p in unmatched_participants}
+                for user in db_users:
+                    if user.get("matcherino_username", "").lower() in participant_names:
+                        users_to_remove.append(user["user_id"])
+                description = "Removing unmatched Matcherino participants"
+            elif category == "ambiguous":
+                for match in ambiguous_matches:
+                    for potential in match["potential_matches"]:
+                        users_to_remove.append(potential["discord_id"])
+                description = "Removing users with ambiguous matches"
+
+            if not users_to_remove:
+                await interaction.followup.send("No users found to remove for the selected category.", ephemeral=True)
+                return
+
+            # Remove users from database and update roles
+            removed_count = 0
+            guild = interaction.guild
+            for user_id in users_to_remove:
+                # Remove from database
+                await self.bot.db.unregister_user(user_id)
+                
+                # Remove roles from Discord user
+                try:
+                    member = await guild.fetch_member(user_id)
+                    if member:
+                        roles_to_remove = [role for role in member.roles 
+                                         if role.name.lower() in ["registered"]]
+                        if roles_to_remove:
+                            await member.remove_roles(*roles_to_remove)
+                    removed_count += 1
+                except discord.NotFound:
+                    logger.warning(f"User {user_id} not found in guild")
+                except Exception as e:
+                    logger.error(f"Error removing roles from user {user_id}: {e}")
+
+            await interaction.followup.send(
+                f"{description}\nSuccessfully removed {removed_count} out of {len(users_to_remove)} users.", 
+                ephemeral=True
+            )
+
+        except Exception as e:
+            logger.error(f"Error in remove-unmatched command: {e}", exc_info=True)
+            await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+    
     async def sync_matcherino_teams(self):
         """Fetch team data from Matcherino and sync it to the database."""
         if not self.bot.TOURNAMENT_ID:
