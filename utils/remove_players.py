@@ -48,7 +48,7 @@ def kick_participant(participant_id: int, bounty_id: str, auth_token: str) -> bo
 
 def main():
     # You'll need to provide your auth token
-    auth_token = "***REMOVED***"
+    auth_token = ""
     
     # Add the bounty ID here
     bounty_id = 146289
