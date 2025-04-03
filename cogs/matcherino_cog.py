@@ -14,6 +14,7 @@ class MatcherinoCog(commands.Cog):
     
     def __init__(self, bot):
         self.bot = bot
+        self._remove_unmatched_users = {}  # Store users to remove per interaction ID
     
     @app_commands.command(name="match-free-agents", description="Match free agents from Matcherino with Discord users")
     @app_commands.default_permissions(administrator=True)
@@ -113,60 +114,88 @@ class MatcherinoCog(commands.Cog):
         
         # Track participant names that have been processed
         processed_participants = set()
+
+        # Find our target user for debugging
+        target_user = next((user for user in db_users if user.get('username') == '0cxld'), None)
+        if target_user:
+            logger.info("=== Target User Info ===")
+            logger.info(f"Discord: {target_user.get('username')}")
+            logger.info(f"Discord ID: {target_user.get('user_id')}")
+            logger.info(f"Matcherino: {target_user.get('matcherino_username')}")
         
         logger.info(f"Starting matching process with {len(participants)} participants and {len(db_users)} database users")
         
         # Pre-process db_users into dictionaries for O(1) lookups
-        # 1. Dictionary for exact matches (lowercase full username -> user)
+        # Dictionary mapping full lowercase matcherino username to user
         exact_match_dict = {}
-        # 2. Dictionary for name-only matches (lowercase name part -> list of users)
+        # Dictionary mapping lowercase name (without ID) to list of users
         name_match_dict = {}
         
         for user in db_users:
-            matcherino_username = user.get('matcherino_username', '').strip()
+            matcherino_username = user.get('matcherino_username', '').strip().lower()
             if not matcherino_username:
                 logger.warning(f"User {user.get('username')} has empty Matcherino username")
                 continue
-                
-            logger.debug(f"Processing DB user: Discord={user.get('username')}, Matcherino={matcherino_username}")
-                
-            # Store for exact match lookup
-            exact_match_dict[matcherino_username.lower()] = user
             
-            # Store for name-only match lookup
-            name_part = matcherino_username.split('#')[0].strip().lower()
+            # Extra logging for our target user
+            if user.get('username') == '0cxld':
+                logger.info("=== Processing Target User ===")
+                logger.info(f"Original matcherino_username: {matcherino_username}")
+            
+            # Store full username for exact matches
+            exact_match_dict[matcherino_username] = user
+            
+            # Store base name for name-only matches
+            name_part = matcherino_username.split('#')[0].strip()
             if name_part not in name_match_dict:
                 name_match_dict[name_part] = []
             name_match_dict[name_part].append(user)
+
+            # More logging for target user
+            if user.get('username') == '0cxld':
+                logger.info(f"Stored in exact_match_dict with key: {matcherino_username}")
+                logger.info(f"Stored in name_match_dict with key: {name_part}")
         
         logger.info(f"Built lookup dictionaries: {len(exact_match_dict)} exact usernames, {len(name_match_dict)} base names")
         
+        # If we found our target user, check the dictionaries
+        if target_user:
+            target_matcherino = target_user.get('matcherino_username', '').lower()
+            target_name_part = target_matcherino.split('#')[0].strip()
+            logger.info("=== Checking Target User in Dictionaries ===")
+            logger.info(f"Looking for exact match with: {target_matcherino}")
+            logger.info(f"Looking for name match with: {target_name_part}")
+            logger.info(f"Found in exact_match_dict: {target_matcherino in exact_match_dict}")
+            logger.info(f"Found in name_match_dict: {target_name_part in name_match_dict}")
+        
         # Process each participant once with O(1) lookups
         for participant in participants:
-            participant_name = participant.get('name', '').strip()
+            participant_name = participant.get('name', '').strip().lower()
             game_username = participant.get('game_username', '').strip()
             
             if not participant_name:
                 logger.warning("Found participant with empty name, skipping")
                 continue
                 
-            if participant_name.lower() in processed_participants:
+            if participant_name in processed_participants:
                 logger.debug(f"Participant {participant_name} already processed, skipping")
                 continue
                 
-            logger.debug(f"Processing participant: {participant_name} (Game username: {game_username})")
-                
-            # Format for exact match: displayName#userId
-            expected_full_username = f"{participant_name}#{participant.get('user_id', '')}"
-            expected_full_username_lower = expected_full_username.lower()
+            # Extra logging for participants that might match our target user
+            if target_user:
+                target_matcherino = target_user.get('matcherino_username', '').lower()
+                target_name_part = target_matcherino.split('#')[0].strip()
+                if (participant_name == target_matcherino):
+                    logger.info("=== Found Potential Matching Participant ===")
+                    logger.info(f"Participant name: {participant_name}")
+                    logger.info(f"Game username: {game_username}")
+                    logger.info(f"User ID: {participant.get('user_id', '')}")
             
-            logger.debug(f"Checking for exact match with: {expected_full_username}")
-            
-            # Check for exact match with O(1) lookup
-            if expected_full_username_lower in exact_match_dict:
-                user = exact_match_dict[expected_full_username_lower]
+            # Check for exact match with O(1) lookup using full username
+            if participant_name in exact_match_dict:
+                user = exact_match_dict[participant_name]
                 if user['user_id'] not in matched_discord_ids:
-                    logger.info(f"Found exact match: '{user.get('matcherino_username', '')}' matches with '{expected_full_username}'")
+                    # logger.info(f"Found exact match: '{user.get('matcherino_username', '')}' matches with '{participant_name}'")
                     exact_matches.append({
                         'participant': participant_name,
                         'participant_id': participant.get('user_id', ''),
@@ -177,27 +206,21 @@ class MatcherinoCog(commands.Cog):
                         'db_matcherino_username': user.get('matcherino_username', '')
                     })
                     matched_discord_ids.add(user['user_id'])
-                    processed_participants.add(participant_name.lower())
+                    processed_participants.add(participant_name)
                     continue
-                else:
-                    logger.debug(f"Found exact match but Discord ID {user['user_id']} already matched")
             
             # If no exact match, try name-only match
-            name_only = participant_name.split('#')[0].strip().lower()
-            logger.debug(f"Trying name-only match with: {name_only}")
-            potential_matches = name_match_dict.get(name_only, [])
-            
-            if potential_matches:
-                logger.debug(f"Found {len(potential_matches)} potential name-only matches for {name_only}")
+            name_part = participant_name.split('#')[0].strip()
+            potential_matches = name_match_dict.get(name_part, [])
             
             # Filter out already matched users
             potential_matches = [user for user in potential_matches if user['user_id'] not in matched_discord_ids]
-            logger.debug(f"After filtering matched users: {len(potential_matches)} potential matches remain")
             
+            # Add to appropriate match category
             if len(potential_matches) == 1:
                 # Single name match found
                 match = potential_matches[0]
-                logger.info(f"Found name-only match: '{match.get('matcherino_username', '')}' base name matches with '{participant_name}'")
+                # logger.info(f"Found name-only match: '{match.get('matcherino_username', '')}' base name matches with '{participant_name}'")
                 name_only_matches.append({
                     'participant': participant_name,
                     'participant_tag': game_username,
@@ -208,7 +231,7 @@ class MatcherinoCog(commands.Cog):
                     'db_matcherino_username': match.get('matcherino_username', '')
                 })
                 matched_discord_ids.add(match['user_id'])
-                processed_participants.add(participant_name.lower())
+                processed_participants.add(participant_name)
             elif len(potential_matches) > 1:
                 # Multiple potential matches - ambiguous
                 logger.info(f"Found ambiguous match: {participant_name} matches with multiple users")
@@ -221,7 +244,25 @@ class MatcherinoCog(commands.Cog):
                         'matcherino_username': user.get('matcherino_username', '')
                     } for user in potential_matches]
                 })
-                processed_participants.add(participant_name.lower())
+                processed_participants.add(participant_name)
+        
+        # After processing all participants, check if our target user was matched
+        if target_user:
+            target_id = target_user['user_id']
+            logger.info("=== Final Match Status for Target User ===")
+            logger.info(f"Target user matched: {target_id in matched_discord_ids}")
+            if target_id in matched_discord_ids:
+                if any(m['discord_id'] == target_id for m in exact_matches):
+                    logger.info("Matched via exact match")
+                elif any(m['discord_id'] == target_id for m in name_only_matches):
+                    logger.info("Matched via name-only match")
+            else:
+                logger.info("User was not matched at all")
+                logger.info("Checking processed participants...")
+                target_matcherino = target_user.get('matcherino_username', '').lower()
+                target_name_part = target_matcherino.split('#')[0].strip()
+                logger.info(f"Target name processed: {target_matcherino in processed_participants}")
+                logger.info(f"Target base name processed: {target_name_part in [p.split('#')[0].strip() for p in processed_participants]}")
         
         # Collect unmatched participants and users in a single pass
         unmatched_participants = [
@@ -419,6 +460,175 @@ class MatcherinoCog(commands.Cog):
         except Exception as e:
             logger.error(f"Error listing unmatched participants: {e}", exc_info=True)
             await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+    @app_commands.command(name="remove-unmatched", description="Remove users from the registration database who aren't on Matcherino")
+    @app_commands.default_permissions(administrator=True)
+    async def remove_unmatched_command(self, interaction: discord.Interaction):
+        """Remove users from the registration database who aren't found in the Matcherino tournament."""
+        if not self.bot.TOURNAMENT_ID:
+            await interaction.response.send_message("MATCHERINO_TOURNAMENT_ID is not set. Please set it in the .env file.", ephemeral=True)
+            return
+            
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            logger.info("Starting unmatched user removal process")
+            
+            # Get all registered users with their Matcherino usernames
+            db_users = await self.bot.db.get_all_matcherino_usernames()
+            if not db_users:
+                await interaction.followup.send("No users with Matcherino usernames found in database.", ephemeral=True)
+                return
+            
+            # Fetch all participants from Matcherino
+            async with MatcherinoScraper() as scraper:
+                participants = await scraper.get_tournament_participants(self.bot.TOURNAMENT_ID)
+                
+                if not participants:
+                    await interaction.followup.send("No participants found in the Matcherino tournament.", ephemeral=True)
+                    return
+
+            # Create sets for O(1) lookups
+            matcherino_participants = {
+                f"{p['name']}#{p['user_id']}".lower(): p 
+                for p in participants 
+                if p['name'] and p['user_id']
+            }
+
+            users_to_remove = []
+            for user in db_users:
+                matcherino_username = user.get('matcherino_username', '').strip().lower()
+                if not matcherino_username:
+                    continue
+                
+                if matcherino_username not in matcherino_participants:
+                    users_to_remove.append(user)
+
+            if not users_to_remove:
+                await interaction.followup.send("No unmatched users found to remove.", ephemeral=True)
+                return
+
+            # Create preview file
+            preview_content = ["Users that will be unregistered:", ""]
+            for user in users_to_remove:
+                preview_content.append(f"• {user['username']} (Discord ID: {user['user_id']}, Matcherino: {user['matcherino_username']})")
+
+            preview_file = discord.File(
+                io.BytesIO("\n".join(preview_content).encode("utf-8")),
+                filename="users_to_remove.txt"
+            )
+
+            # Store users to remove for this interaction
+            self._remove_unmatched_users[str(interaction.id)] = users_to_remove
+
+            # Create confirm/cancel buttons
+            confirm_button = discord.ui.Button(
+                style=discord.ButtonStyle.danger,
+                label=f"Confirm Remove ({len(users_to_remove)} users)",
+                custom_id=f"remove_unmatched_confirm_{interaction.id}"
+            )
+            cancel_button = discord.ui.Button(
+                style=discord.ButtonStyle.secondary,
+                label="Cancel",
+                custom_id=f"remove_unmatched_cancel_{interaction.id}"
+            )
+
+            view = discord.ui.View()
+            view.add_item(confirm_button)
+            view.add_item(cancel_button)
+
+            await interaction.followup.send(
+                f"Found {len(users_to_remove)} users to remove. Please review the attached file and confirm the action.",
+                file=preview_file,
+                view=view,
+                ephemeral=True
+            )
+
+        except Exception as e:
+            logger.error(f"Error in remove-unmatched preview: {e}", exc_info=True)
+            await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction):
+        """Handle button interactions for remove-unmatched command"""
+        if not interaction.data or not isinstance(interaction.data, dict):
+            return
+
+        custom_id = interaction.data.get("custom_id", "")
+        if not custom_id:
+            return
+
+        # Handle confirmation/cancellation
+        if custom_id.startswith("remove_unmatched_"):
+            await interaction.response.defer(ephemeral=True)
+            original_interaction_id = custom_id.split("_")[-1]
+            users_to_remove = self._remove_unmatched_users.get(original_interaction_id)
+
+            if not users_to_remove:
+                await interaction.followup.send("This confirmation has expired. Please run the command again.", ephemeral=True)
+                return
+
+            if custom_id.startswith("remove_unmatched_cancel_"):
+                # Clean up stored data
+                del self._remove_unmatched_users[original_interaction_id]
+                await interaction.followup.send("Operation cancelled.", ephemeral=True)
+                return
+
+            if custom_id.startswith("remove_unmatched_confirm_"):
+                try:
+                    # Find the "Registered" role
+                    guild = interaction.guild
+                    registered_role = discord.utils.get(guild.roles, name="Registered")
+
+                    # Remove unmatched users from database and remove their roles
+                    roles_removed = 0
+                    users_not_found = 0
+                    role_errors = 0
+
+                    for user in users_to_remove:
+                        # Remove from database
+                        await self.bot.db.unregister_user(user['user_id'])
+
+                        # Remove the "Registered" role if it exists
+                        if registered_role:
+                            try:
+                                member = await guild.fetch_member(user['user_id'])
+                                if member and registered_role in member.roles:
+                                    await member.remove_roles(registered_role)
+                                    roles_removed += 1
+                                    logger.info(f"Removed 'Registered' role from user {user['username']} ({user['user_id']})")
+                            except discord.NotFound:
+                                users_not_found += 1
+                                logger.warning(f"User {user['username']} ({user['user_id']}) not found in guild")
+                            except discord.Forbidden:
+                                role_errors += 1
+                                logger.error(f"Bot doesn't have permission to remove roles from {user['username']} ({user['user_id']})")
+                            except Exception as e:
+                                role_errors += 1
+                                logger.error(f"Error removing role from {user['username']} ({user['user_id']}): {e}")
+
+                    # Clean up stored data
+                    del self._remove_unmatched_users[original_interaction_id]
+
+                    # Create result message
+                    status = []
+                    status.append(f"Successfully removed {len(users_to_remove)} users from the registration database.")
+                    if registered_role:
+                        status.append(f"\nRole status:")
+                        status.append(f"• Successfully removed 'Registered' role from {roles_removed} users")
+                        if users_not_found > 0:
+                            status.append(f"• {users_not_found} users were not found in the server")
+                        if role_errors > 0:
+                            status.append(f"• Failed to remove roles from {role_errors} users (see logs)")
+
+                    await interaction.followup.send("\n".join(status), ephemeral=True)
+
+                except Exception as e:
+                    logger.error(f"Error removing unmatched users: {e}", exc_info=True)
+                    await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+                    # Clean up stored data even if there's an error
+                    if original_interaction_id in self._remove_unmatched_users:
+                        del self._remove_unmatched_users[original_interaction_id]
 
 async def setup(bot):
     await bot.add_cog(MatcherinoCog(bot))
