@@ -5,6 +5,7 @@ import logging
 import io
 import csv
 import datetime
+from matcherino_scraper import MatcherinoScraper
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,6 @@ class MatcherinoCog(commands.Cog):
             logger.info(f"Found {len(db_users)} users with Matcherino usernames in database")
             
             # Step 2: Fetch all participants from Matcherino API
-            from matcherino_scraper import MatcherinoScraper
             async with MatcherinoScraper() as scraper:
                 participants = await scraper.get_tournament_participants(self.bot.TOURNAMENT_ID)
                 
@@ -309,6 +309,84 @@ class MatcherinoCog(commands.Cog):
         csv_buffer.seek(0)
         csv_bytes = csv_buffer.getvalue().encode('utf-8')
         return discord.File(io.BytesIO(csv_bytes), filename="matcherino_participant_matches.csv")
+
+    @app_commands.command(name="list-unmatched", description="List all unmatched Matcherino participants for cleanup")
+    @app_commands.default_permissions(administrator=True)
+    async def list_unmatched_command(self, interaction: discord.Interaction):
+        """Admin command to list all Matcherino participants that aren't matched to Discord users."""
+        if not self.bot.TOURNAMENT_ID:
+            await interaction.response.send_message("MATCHERINO_TOURNAMENT_ID is not set. Please set it in the .env file.", ephemeral=True)
+            return
+            
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            logger.info("Starting unmatched participant listing process")
+            
+            # Get all registered users with their Matcherino usernames
+            db_users = await self.bot.db.get_all_matcherino_usernames()
+            if not db_users:
+                await interaction.followup.send("No users with Matcherino usernames found in database.", ephemeral=True)
+                return
+            
+            # Fetch all participants from Matcherino
+            async with MatcherinoScraper() as scraper:
+                participants = await scraper.get_tournament_participants(self.bot.TOURNAMENT_ID)
+                
+                if not participants:
+                    await interaction.followup.send("No participants found in the Matcherino tournament.", ephemeral=True)
+                    return
+            
+            # Process participants to find unmatched ones
+            (exact_matches, name_only_matches, ambiguous_matches,
+             unmatched_participants, unmatched_db_users) = await self.match_participants_with_db_users(
+                 participants, db_users
+            )
+            
+            # Create a text file listing unmatched participants
+            content = ["# Unmatched Matcherino Participants", ""]
+            content.append("These participants are on Matcherino but not matched to any Discord user:\n")
+            
+            for participant in unmatched_participants:
+                name = participant['name']
+                matcherino_id = participant['matcherino_id']
+                game_username = participant['game_username']
+                
+                line = f"- {name}"
+                if matcherino_id:
+                    line += f" (ID: {matcherino_id})"
+                if game_username:
+                    line += f" [Game: {game_username}]"
+                content.append(line)
+            
+            content.append("\n# Ambiguous Matches")
+            content.append("These participants have multiple potential Discord matches:\n")
+            
+            for match in ambiguous_matches:
+                content.append(f"- {match['participant']}")
+                if match.get('participant_tag'):
+                    content.append(f"  Game username: {match['participant_tag']}")
+                content.append("  Potential Discord matches:")
+                for potential in match['potential_matches']:
+                    content.append(f"  * Discord: {potential['discord_username']} (ID: {potential['discord_id']})")
+                    if potential.get('matcherino_username'):
+                        content.append(f"    Current Matcherino username: {potential['matcherino_username']}")
+                content.append("")
+            
+            # Save as text file
+            file_content = "\n".join(content)
+            file = discord.File(
+                io.BytesIO(file_content.encode('utf-8')),
+                filename="unmatched_participants.txt"
+            )
+            
+            # Send the file
+            summary = f"Found {len(unmatched_participants)} unmatched participants and {len(ambiguous_matches)} ambiguous matches."
+            await interaction.followup.send(summary, file=file, ephemeral=True)
+            
+        except Exception as e:
+            logger.error(f"Error listing unmatched participants: {e}", exc_info=True)
+            await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(MatcherinoCog(bot))
