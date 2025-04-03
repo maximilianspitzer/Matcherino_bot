@@ -11,6 +11,7 @@ class TeamsCog(commands.Cog):
     
     def __init__(self, bot):
         self.bot = bot
+        self.voice_category_id = 1357422869528838236
     
     @app_commands.command(name="my-team", description="View your team and its members")
     async def my_team_command(self, interaction: discord.Interaction):
@@ -326,6 +327,69 @@ class TeamsCog(commands.Cog):
         except Exception as e:
             logger.error(f"Error during team sync: {e}")
             raise
+
+    @app_commands.command(name="create-team-voice", description="Create private voice channels for all teams")
+    @app_commands.default_permissions(administrator=True)
+    async def create_team_voice_channels(self, interaction: discord.Interaction):
+        """Admin command to create private voice channels for all teams."""
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            guild = interaction.guild
+            category = guild.get_channel(self.voice_category_id)
+            
+            if not category:
+                await interaction.followup.send(f"Could not find the category with ID {self.voice_category_id}", ephemeral=True)
+                return
+                
+            # Get all active teams
+            teams = await self.bot.db.get_active_teams()
+            if not teams:
+                await interaction.followup.send("No active teams found.", ephemeral=True)
+                return
+
+            channels_created = 0
+            for team in teams:
+                # Get team members' Discord IDs
+                team_info = await self.bot.db.get_team_members(team['team_id'])
+                member_ids = [int(member['discord_user_id']) for member in team_info['members'] if member.get('discord_user_id')]
+                
+                if not member_ids:
+                    continue
+
+                # Create overwrites for the channel
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                    guild.me: discord.PermissionOverwrite(view_channel=True, manage_channels=True)
+                }
+                
+                # Add overwrites for each team member
+                for member_id in member_ids:
+                    member = guild.get_member(member_id)
+                    if member:
+                        overwrites[member] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
+
+                # Create the voice channel
+                channel_name = f"🎮 {team['team_name']}"
+                try:
+                    await guild.create_voice_channel(
+                        name=channel_name,
+                        category=category,
+                        overwrites=overwrites
+                    )
+                    channels_created += 1
+                except Exception as e:
+                    logger.error(f"Error creating voice channel for team {team['team_name']}: {e}")
+                    continue
+
+            await interaction.followup.send(
+                f"Created {channels_created} team voice channels in category '{category.name}'.",
+                ephemeral=True
+            )
+
+        except Exception as e:
+            logger.error(f"Error in create-team-voice command: {e}")
+            await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(TeamsCog(bot))
