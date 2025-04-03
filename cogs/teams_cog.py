@@ -500,7 +500,7 @@ class TeamsCog(commands.Cog):
                 team_members = [member for member in team['members'] if member.get('discord_user_id')]
                 
                 # Create new overwrites
-                overwrites = {
+                new_overwrites = {
                     guild.default_role: discord.PermissionOverwrite(view_channel=False),
                     guild.me: discord.PermissionOverwrite(view_channel=True, manage_channels=True)
                 }
@@ -512,27 +512,44 @@ class TeamsCog(commands.Cog):
                     discord_member = guild.get_member(discord_id)
                     if discord_member:
                         discord_members.append(discord_member)
-                        overwrites[discord_member] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
+                        new_overwrites[discord_member] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
 
                 try:
-                    # Add delay between operations to avoid rate limits
-                    await asyncio.sleep(2)
-
-                    # Update channel overwrites
-                    await team_channel.edit(overwrites=overwrites)
+                    # Compare old and new permissions
+                    permissions_changed = False
+                    old_overwrites = team_channel.overwrites
                     
-                    # Send notification about updated permissions
-                    if discord_members:
-                        mentions = " ".join(member.mention for member in discord_members)
-                        await team_channel.send(
-                            f"🔄 Channel permissions have been updated! The following members now have access: {mentions}"
-                        )
+                    # Check if any permissions were added or modified
+                    for user, overwrite in new_overwrites.items():
+                        if user not in old_overwrites or old_overwrites[user].pair() != overwrite.pair():
+                            permissions_changed = True
+                            break
+                            
+                    # Check if any permissions were removed
+                    for user in old_overwrites:
+                        if user != guild.default_role and user != guild.me and user not in new_overwrites:
+                            permissions_changed = True
+                            break
                     
-                    channels_updated += 1
+                    if permissions_changed:
+                        # Add delay between operations to avoid rate limits
+                        await asyncio.sleep(2)
 
-                    # Take a break every 25 channels to avoid rate limits
-                    if channels_updated % 25 == 0:
-                        await asyncio.sleep(5)
+                        # Update channel overwrites
+                        await team_channel.edit(overwrites=new_overwrites)
+                        
+                        # Send notification about updated permissions only if they changed
+                        if discord_members:
+                            mentions = " ".join(member.mention for member in discord_members)
+                            await team_channel.send(
+                                f"🔄 Channel permissions have been updated! The following members now have access: {mentions}"
+                            )
+                        
+                        channels_updated += 1
+
+                        # Take a break every 25 channels to avoid rate limits
+                        if channels_updated % 25 == 0:
+                            await asyncio.sleep(5)
 
                 except Exception as e:
                     logger.error(f"Error updating permissions for team {team_name}: {e}")
