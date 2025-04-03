@@ -329,6 +329,26 @@ class TeamsCog(commands.Cog):
             logger.error(f"Error during team sync: {e}")
             raise
 
+    async def create_or_get_next_category(self, guild: discord.Guild, base_category: discord.CategoryChannel, category_number: int = 1) -> discord.CategoryChannel:
+        """Create a new category or get an existing one with proper sequential numbering."""
+        category_name = f"Team Channels #{category_number}"
+        
+        # First try to find an existing category
+        category = discord.utils.get(guild.categories, name=category_name)
+        if category:
+            # If the category has less than 50 channels, return it
+            if len(category.channels) < 50:
+                return category
+            # If it's full, recursively try the next number
+            return await self.create_or_get_next_category(guild, base_category, category_number + 1)
+            
+        # Create new category with same permissions as base category
+        return await guild.create_category(
+            name=category_name,
+            position=base_category.position + category_number,
+            overwrites=base_category.overwrites
+        )
+
     @app_commands.command(name="create-team-voice", description="Create private voice channels for all teams")
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.cooldown(rate=1, per=300.0)  # Can only run once every 5 minutes
@@ -338,10 +358,10 @@ class TeamsCog(commands.Cog):
         
         try:
             guild = interaction.guild
-            category = guild.get_channel(self.voice_category_id)
+            base_category = guild.get_channel(self.voice_category_id)
             
-            if not category:
-                await interaction.followup.send(f"Could not find the category with ID {self.voice_category_id}", ephemeral=True)
+            if not base_category:
+                await interaction.followup.send(f"Could not find the base category with ID {self.voice_category_id}", ephemeral=True)
                 return
                 
             # Get all active teams using the correct method
@@ -351,7 +371,17 @@ class TeamsCog(commands.Cog):
                 return
 
             channels_created = 0
+            categories_created = 1
+            current_category = base_category
+
             for team in teams:
+                # Check if current category is full (50 channels)
+                if len(current_category.channels) >= 50:
+                    # Get or create next category
+                    categories_created += 1
+                    await asyncio.sleep(2)  # Rate limit delay for category creation
+                    current_category = await self.create_or_get_next_category(guild, base_category, categories_created)
+
                 # Team members are already included in the team info
                 team_members = [member for member in team['members'] if member.get('discord_user_id')]
                 
@@ -385,7 +415,7 @@ class TeamsCog(commands.Cog):
                     
                     channel = await guild.create_voice_channel(
                         name=channel_name,
-                        category=category,
+                        category=current_category,
                         overwrites=overwrites
                     )
                     
@@ -414,7 +444,7 @@ class TeamsCog(commands.Cog):
                     continue
 
             await interaction.followup.send(
-                f"Created {channels_created} team voice channels in category '{category.name}'.",
+                f"Created {channels_created} team voice channels across {categories_created} categories.",
                 ephemeral=True
             )
 
