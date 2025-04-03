@@ -278,16 +278,10 @@ class TeamsCog(commands.Cog):
             logger.error(f"Error in debug-team-match command: {e}", exc_info=True)
             await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
     
-    @app_commands.command(name="remove-unmatched", description="Remove unmatched users from database and Discord roles")
-    @app_commands.choices(category=[
-        app_commands.Choice(name="Unmatched database users", value="unmatched_db"),
-        app_commands.Choice(name="Unmatched participants", value="unmatched_participants"),
-        app_commands.Choice(name="Ambiguous matches", value="ambiguous"),
-        app_commands.Choice(name="All unmatched", value="all")
-    ])
+    @app_commands.command(name="remove-unmatched", description="Remove users who have no matches at all (neither exact nor loose name matches)")
     @app_commands.default_permissions(administrator=True)
-    async def remove_unmatched_command(self, interaction: discord.Interaction, category: str):
-        """Remove unmatched users based on specified category"""
+    async def remove_unmatched_command(self, interaction: discord.Interaction):
+        """Remove users who have no matches at all in Matcherino"""
         if not self.bot.TOURNAMENT_ID:
             await interaction.response.send_message("MATCHERINO_TOURNAMENT_ID is not set.", ephemeral=True)
             return
@@ -315,60 +309,28 @@ class TeamsCog(commands.Cog):
                 await interaction.followup.send("MatcherinoCog not found.", ephemeral=True)
                 return
 
-            # Match participants with database users
+            # Use the exact same matching logic as match-free-agents
             (exact_matches, name_only_matches, ambiguous_matches,
              unmatched_participants, unmatched_db_users) = await matcherino_cog.match_participants_with_db_users(
                  participants, db_users
             )
 
-            # Track all matched Discord IDs to avoid removing matched users
-            matched_discord_ids = set()
-            
-            # Add exact matches
-            for match in exact_matches:
-                matched_discord_ids.add(match["discord_id"])
-            
-            # Add name-only matches - these are also valid matches
-            for match in name_only_matches:
-                matched_discord_ids.add(match["discord_id"])
+            # Track all matched Discord IDs (both exact and name-only matches)
+            matched_discord_ids = {match["discord_id"] for match in exact_matches}
+            matched_discord_ids.update(match["discord_id"] for match in name_only_matches)
 
+            # Users to remove are ONLY those who have no matches at all
             users_to_remove = []
-            description = ""
-
-            # Build list of users to remove based on category
-            if category == "all":
-                # Only include users that aren't in exact or name-only matches
-                for user in db_users:
-                    if user["user_id"] not in matched_discord_ids:
-                        users_to_remove.append(user["user_id"])
-                description = "Removing all unmatched users"
-            elif category == "unmatched_db":
-                # Only include users that aren't in exact or name-only matches
-                for user in unmatched_db_users:
-                    if user["discord_id"] not in matched_discord_ids:
-                        users_to_remove.append(user["discord_id"])
-                description = "Removing unmatched database users"
-            elif category == "unmatched_participants":
-                # Get the Discord IDs of users who are registered with usernames that match unmatched participants
-                participant_names = {p["name"].lower().split('#')[0] for p in unmatched_participants}
-                for user in db_users:
-                    user_matcherino = user.get("matcherino_username", "").lower().split('#')[0]
-                    if user_matcherino in participant_names and user["user_id"] not in matched_discord_ids:
-                        users_to_remove.append(user["user_id"])
-                description = "Removing unmatched Matcherino participants"
-            elif category == "ambiguous":
-                # Only include ambiguous matches if they're not exact or name-only matches
-                for match in ambiguous_matches:
-                    for potential in match["potential_matches"]:
-                        if potential["discord_id"] not in matched_discord_ids:
-                            users_to_remove.append(potential["discord_id"])
-                description = "Removing users with ambiguous matches"
+            for user in db_users:
+                if user["user_id"] not in matched_discord_ids:
+                    users_to_remove.append(user["user_id"])
 
             if not users_to_remove:
-                await interaction.followup.send("No users found to remove for the selected category.", ephemeral=True)
+                await interaction.followup.send("No completely unmatched users found to remove.", ephemeral=True)
                 return
 
             # Log what we're about to do
+            description = "Removing users who have no matches at all"
             logger.info(f"{description}. Found {len(users_to_remove)} users to remove.")
 
             # Remove users from database and update roles
@@ -393,7 +355,7 @@ class TeamsCog(commands.Cog):
                     logger.error(f"Error removing roles from user {user_id}: {e}")
 
             await interaction.followup.send(
-                f"{description}\nSuccessfully removed {removed_count} out of {len(users_to_remove)} users.", 
+                f"{description}\nSuccessfully removed {removed_count} out of {len(users_to_remove)} users who had no matches at all.", 
                 ephemeral=True
             )
 

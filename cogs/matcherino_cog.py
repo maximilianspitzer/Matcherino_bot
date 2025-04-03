@@ -164,17 +164,17 @@ class MatcherinoCog(commands.Cog):
                     processed_participants.add(participant_name.lower())
                     continue
             
-            # If no exact match, try name-only match with O(1) lookup
+            # If no exact match, try name-only match
             name_only = participant_name.split('#')[0].strip().lower()
             potential_matches = name_match_dict.get(name_only, [])
             
             # Filter out already matched users
             potential_matches = [user for user in potential_matches if user['user_id'] not in matched_discord_ids]
             
-            # Process potential matches
             if len(potential_matches) == 1:
                 # Single name match found
                 match = potential_matches[0]
+                logger.info(f"Found name-only match: '{match.get('matcherino_username', '')}' base name matches with '{participant_name}'")
                 name_only_matches.append({
                     'participant': participant_name,
                     'participant_tag': game_username,
@@ -221,8 +221,8 @@ class MatcherinoCog(commands.Cog):
         ]
         
         return (
-            exact_matches, 
-            name_only_matches, 
+            exact_matches,
+            name_only_matches,
             ambiguous_matches,
             unmatched_participants,
             unmatched_db_users
