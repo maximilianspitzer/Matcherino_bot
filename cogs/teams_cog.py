@@ -318,36 +318,55 @@ class TeamsCog(commands.Cog):
                  participants, db_users
             )
 
+            # Track all matched Discord IDs to avoid removing matched users
+            matched_discord_ids = set()
+            
+            # Add exact matches
+            for match in exact_matches:
+                matched_discord_ids.add(match["discord_id"])
+            
+            # Add name-only matches - these are also valid matches
+            for match in name_only_matches:
+                matched_discord_ids.add(match["discord_id"])
+
             users_to_remove = []
             description = ""
 
             # Build list of users to remove based on category
             if category == "all":
-                # All unmatched = unmatched DB users + ambiguous matches
-                users_to_remove.extend([u["discord_id"] for u in unmatched_db_users])
-                for match in ambiguous_matches:
-                    for potential in match["potential_matches"]:
-                        users_to_remove.append(potential["discord_id"])
-                description = "Removing all unmatched users and ambiguous matches"
+                # Only include users that aren't in exact or name-only matches
+                for user in db_users:
+                    if user["user_id"] not in matched_discord_ids:
+                        users_to_remove.append(user["user_id"])
+                description = "Removing all unmatched users"
             elif category == "unmatched_db":
-                users_to_remove.extend([u["discord_id"] for u in unmatched_db_users])
+                # Only include users that aren't in exact or name-only matches
+                for user in unmatched_db_users:
+                    if user["discord_id"] not in matched_discord_ids:
+                        users_to_remove.append(user["discord_id"])
                 description = "Removing unmatched database users"
             elif category == "unmatched_participants":
-                # These are in unmatched_participants but we need to find their discord IDs from db
-                participant_names = {p["name"].lower() for p in unmatched_participants}
+                # Get the Discord IDs of users who are registered with usernames that match unmatched participants
+                participant_names = {p["name"].lower().split('#')[0] for p in unmatched_participants}
                 for user in db_users:
-                    if user.get("matcherino_username", "").lower() in participant_names:
+                    user_matcherino = user.get("matcherino_username", "").lower().split('#')[0]
+                    if user_matcherino in participant_names and user["user_id"] not in matched_discord_ids:
                         users_to_remove.append(user["user_id"])
                 description = "Removing unmatched Matcherino participants"
             elif category == "ambiguous":
+                # Only include ambiguous matches if they're not exact or name-only matches
                 for match in ambiguous_matches:
                     for potential in match["potential_matches"]:
-                        users_to_remove.append(potential["discord_id"])
+                        if potential["discord_id"] not in matched_discord_ids:
+                            users_to_remove.append(potential["discord_id"])
                 description = "Removing users with ambiguous matches"
 
             if not users_to_remove:
                 await interaction.followup.send("No users found to remove for the selected category.", ephemeral=True)
                 return
+
+            # Log what we're about to do
+            logger.info(f"{description}. Found {len(users_to_remove)} users to remove.")
 
             # Remove users from database and update roles
             removed_count = 0
@@ -361,7 +380,7 @@ class TeamsCog(commands.Cog):
                     member = await guild.fetch_member(user_id)
                     if member:
                         roles_to_remove = [role for role in member.roles 
-                                         if role.name.lower() in ["registered"]]
+                                         if role.name.lower() in ["registered", "team member"]]
                         if roles_to_remove:
                             await member.remove_roles(*roles_to_remove)
                     removed_count += 1

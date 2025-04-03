@@ -253,5 +253,84 @@ class AdminCog(commands.Cog):
             logger.error(f"Error in close-signups command: {e}", exc_info=True)
             await interaction.response.send_message("An error occurred while toggling signup status.", ephemeral=True)
 
+    @app_commands.command(name="verify-roles", description="Verify and restore 'Registered' role for all registered users")
+    @app_commands.default_permissions(administrator=True)
+    async def verify_roles_command(self, interaction: discord.Interaction):
+        """Admin command to verify and restore the 'Registered' role for all users who are registered in the database."""
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            # Get all registered users from database
+            registered_users = await self.bot.db.get_registered_users()
+            
+            if not registered_users:
+                await interaction.followup.send("No users are currently registered in the database.", ephemeral=True)
+                return
+            
+            # Find the "Registered" role
+            guild = interaction.guild
+            registered_role = discord.utils.get(guild.roles, name="Registered")
+            
+            if not registered_role:
+                await interaction.followup.send("Could not find the 'Registered' role in this server.", ephemeral=True)
+                return
+            
+            # Track statistics
+            total_users = len(registered_users)
+            users_fixed = 0
+            users_already_correct = 0
+            users_not_found = 0
+            errors = 0
+            
+            # Process each registered user
+            for user in registered_users:
+                try:
+                    # Skip banned users
+                    if user.get('banned', False):
+                        continue
+                        
+                    user_id = user['user_id']
+                    member = guild.get_member(user_id)
+                    
+                    if member is None:
+                        users_not_found += 1
+                        logger.warning(f"User {user.get('username', user_id)} not found in guild")
+                        continue
+                    
+                    if registered_role not in member.roles:
+                        try:
+                            await member.add_roles(registered_role)
+                            users_fixed += 1
+                            logger.info(f"Added 'Registered' role to {member.name} ({user_id})")
+                        except discord.Forbidden:
+                            errors += 1
+                            logger.error(f"Bot doesn't have permission to add roles to {member.name} ({user_id})")
+                        except Exception as e:
+                            errors += 1
+                            logger.error(f"Error adding role to {member.name} ({user_id}): {e}")
+                    else:
+                        users_already_correct += 1
+                        
+                except Exception as e:
+                    errors += 1
+                    logger.error(f"Error processing user {user.get('username', user['user_id'])}: {e}")
+            
+            # Send summary
+            summary = [
+                f"Processed {total_users} registered users:",
+                f"• {users_fixed} users had their 'Registered' role restored",
+                f"• {users_already_correct} users already had correct roles",
+                f"• {users_not_found} users were not found in the server",
+            ]
+            
+            if errors > 0:
+                summary.append(f"• {errors} errors occurred (check logs)")
+                
+            await interaction.followup.send("\n".join(summary), ephemeral=True)
+            
+        except Exception as e:
+            logger.error(f"Error in verify-roles command: {e}", exc_info=True)
+            await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
 async def setup(bot):
     await bot.add_cog(AdminCog(bot))
