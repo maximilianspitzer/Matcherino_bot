@@ -363,20 +363,33 @@ class TeamsCog(commands.Cog):
                     guild.me: discord.PermissionOverwrite(view_channel=True, manage_channels=True)
                 }
                 
-                # Add overwrites for each team member
+                # Get member objects and add overwrites
+                team_members = []
                 for member_id in member_ids:
                     member = guild.get_member(member_id)
                     if member:
+                        team_members.append(member)
                         overwrites[member] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
+
+                if not team_members:
+                    continue
 
                 # Create the voice channel
                 channel_name = f"🎮 {team['team_name']}"
                 try:
-                    await guild.create_voice_channel(
+                    channel = await guild.create_voice_channel(
                         name=channel_name,
                         category=category,
                         overwrites=overwrites
                     )
+                    
+                    # Send a notification message in the voice channel
+                    mentions = " ".join(member.mention for member in team_members)
+                    await channel.send(
+                        f"🎮 Welcome to your team voice channel! {mentions}\n"
+                        "This is your private voice channel for team communication."
+                    )
+                    
                     channels_created += 1
                 except Exception as e:
                     logger.error(f"Error creating voice channel for team {team['team_name']}: {e}")
