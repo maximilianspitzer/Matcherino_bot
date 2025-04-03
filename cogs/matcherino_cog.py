@@ -114,6 +114,8 @@ class MatcherinoCog(commands.Cog):
         # Track participant names that have been processed
         processed_participants = set()
         
+        logger.info(f"Starting matching process with {len(participants)} participants and {len(db_users)} database users")
+        
         # Pre-process db_users into dictionaries for O(1) lookups
         # 1. Dictionary for exact matches (lowercase full username -> user)
         exact_match_dict = {}
@@ -123,7 +125,10 @@ class MatcherinoCog(commands.Cog):
         for user in db_users:
             matcherino_username = user.get('matcherino_username', '').strip()
             if not matcherino_username:
+                logger.warning(f"User {user.get('username')} has empty Matcherino username")
                 continue
+                
+            logger.debug(f"Processing DB user: Discord={user.get('username')}, Matcherino={matcherino_username}")
                 
             # Store for exact match lookup
             exact_match_dict[matcherino_username.lower()] = user
@@ -134,17 +139,28 @@ class MatcherinoCog(commands.Cog):
                 name_match_dict[name_part] = []
             name_match_dict[name_part].append(user)
         
+        logger.info(f"Built lookup dictionaries: {len(exact_match_dict)} exact usernames, {len(name_match_dict)} base names")
+        
         # Process each participant once with O(1) lookups
         for participant in participants:
             participant_name = participant.get('name', '').strip()
             game_username = participant.get('game_username', '').strip()
             
-            if not participant_name or participant_name.lower() in processed_participants:
+            if not participant_name:
+                logger.warning("Found participant with empty name, skipping")
                 continue
+                
+            if participant_name.lower() in processed_participants:
+                logger.debug(f"Participant {participant_name} already processed, skipping")
+                continue
+                
+            logger.debug(f"Processing participant: {participant_name} (Game username: {game_username})")
                 
             # Format for exact match: displayName#userId
             expected_full_username = f"{participant_name}#{participant.get('user_id', '')}"
             expected_full_username_lower = expected_full_username.lower()
+            
+            logger.debug(f"Checking for exact match with: {expected_full_username}")
             
             # Check for exact match with O(1) lookup
             if expected_full_username_lower in exact_match_dict:
@@ -163,13 +179,20 @@ class MatcherinoCog(commands.Cog):
                     matched_discord_ids.add(user['user_id'])
                     processed_participants.add(participant_name.lower())
                     continue
+                else:
+                    logger.debug(f"Found exact match but Discord ID {user['user_id']} already matched")
             
             # If no exact match, try name-only match
             name_only = participant_name.split('#')[0].strip().lower()
+            logger.debug(f"Trying name-only match with: {name_only}")
             potential_matches = name_match_dict.get(name_only, [])
+            
+            if potential_matches:
+                logger.debug(f"Found {len(potential_matches)} potential name-only matches for {name_only}")
             
             # Filter out already matched users
             potential_matches = [user for user in potential_matches if user['user_id'] not in matched_discord_ids]
+            logger.debug(f"After filtering matched users: {len(potential_matches)} potential matches remain")
             
             if len(potential_matches) == 1:
                 # Single name match found
@@ -188,6 +211,7 @@ class MatcherinoCog(commands.Cog):
                 processed_participants.add(participant_name.lower())
             elif len(potential_matches) > 1:
                 # Multiple potential matches - ambiguous
+                logger.info(f"Found ambiguous match: {participant_name} matches with multiple users")
                 ambiguous_matches.append({
                     'participant': participant_name,
                     'participant_tag': game_username,
@@ -219,6 +243,14 @@ class MatcherinoCog(commands.Cog):
             for user in db_users
             if user['user_id'] not in matched_discord_ids
         ]
+        
+        logger.info("=== Matching Results ===")
+        logger.info(f"Exact matches: {len(exact_matches)}")
+        logger.info(f"Name-only matches: {len(name_only_matches)}")
+        logger.info(f"Ambiguous matches: {len(ambiguous_matches)}")
+        logger.info(f"Unmatched participants: {len(unmatched_participants)}")
+        logger.info(f"Unmatched DB users: {len(unmatched_db_users)}")
+        logger.info(f"Total matched Discord IDs: {len(matched_discord_ids)}")
         
         return (
             exact_matches,
