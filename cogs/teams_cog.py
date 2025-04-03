@@ -344,19 +344,18 @@ class TeamsCog(commands.Cog):
                 await interaction.followup.send(f"Could not find the category with ID {self.voice_category_id}", ephemeral=True)
                 return
                 
-            # Get all active teams
-            teams = await self.bot.db.get_active_teams()
+            # Get all active teams using the correct method
+            teams = await self.bot.db.get_matcherino_teams(active_only=True)
             if not teams:
                 await interaction.followup.send("No active teams found.", ephemeral=True)
                 return
 
             channels_created = 0
             for team in teams:
-                # Get team members' Discord IDs
-                team_info = await self.bot.db.get_team_members(team['team_id'])
-                member_ids = [int(member['discord_user_id']) for member in team_info['members'] if member.get('discord_user_id')]
+                # Team members are already included in the team info
+                team_members = [member for member in team['members'] if member.get('discord_user_id')]
                 
-                if not member_ids:
+                if not team_members:
                     continue
 
                 # Create overwrites for the channel
@@ -366,14 +365,15 @@ class TeamsCog(commands.Cog):
                 }
                 
                 # Get member objects and add overwrites
-                team_members = []
-                for member_id in member_ids:
-                    member = guild.get_member(member_id)
-                    if member:
-                        team_members.append(member)
-                        overwrites[member] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
+                discord_members = []
+                for member in team_members:
+                    discord_id = member['discord_user_id']
+                    discord_member = guild.get_member(discord_id)
+                    if discord_member:
+                        discord_members.append(discord_member)
+                        overwrites[discord_member] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
 
-                if not team_members:
+                if not discord_members:
                     continue
 
                 # Create the voice channel
@@ -394,7 +394,7 @@ class TeamsCog(commands.Cog):
                     await asyncio.sleep(1)  # 1 second delay before sending message
                     
                     # Send a notification message in the voice channel
-                    mentions = " ".join(member.mention for member in team_members)
+                    mentions = " ".join(member.mention for member in discord_members)
                     await channel.send(
                         f"🎮 Welcome to your team voice channel! {mentions}\n"
                         "This is your private voice channel for team communication."
