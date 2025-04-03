@@ -184,32 +184,31 @@ class TeamsCog(commands.Cog):
                 await interaction.followup.send("No users with Matcherino usernames found in database.", ephemeral=True)
                 return
                 
-            # Get all team members from Matcherino API
+            # Get participants from Matcherino
             from matcherino_scraper import MatcherinoScraper
             async with MatcherinoScraper() as scraper:
+                # First get team data
                 teams_data = await scraper.get_teams_data(self.bot.TOURNAMENT_ID)
                 
-                if not teams_data:
-                    await interaction.followup.send("No teams found in the Matcherino tournament.", ephemeral=True)
+                # Then get participant data
+                participants = await scraper.get_tournament_participants(self.bot.TOURNAMENT_ID)
+                
+                if not teams_data and not participants:
+                    await interaction.followup.send("No teams or participants found in the Matcherino tournament.", ephemeral=True)
                     return
-                    
-            # Extract all unique member names from all teams
-            api_members = set()
-            for team in teams_data:
-                for member in team.get('members', []):
-                    api_members.add(member)
-                    
-            # Compare registered usernames with API member names
-            matched_users = []
-            unmatched_users = []
-            
-            for user in db_users:
-                matcherino_username = user.get('matcherino_username', '')
-                if matcherino_username in api_members:
-                    matched_users.append(user)
-                else:
-                    unmatched_users.append(user)
-                    
+
+            # Get the Matcherino cog to use its matching function
+            matcherino_cog = self.bot.get_cog("MatcherinoCog")
+            if not matcherino_cog:
+                await interaction.followup.send("MatcherinoCog not found.", ephemeral=True)
+                return
+
+            # Use the same matching logic as match-free-agents
+            (exact_matches, name_only_matches, ambiguous_matches,
+             unmatched_participants, unmatched_db_users) = await matcherino_cog.match_participants_with_db_users(
+                 participants, db_users
+            )
+
             # Create embed with debugging information
             embed = discord.Embed(
                 title="Team Matching Debug Info",
@@ -218,20 +217,24 @@ class TeamsCog(commands.Cog):
             )
             
             # Add summary stats
+            matched_users = exact_matches + name_only_matches
             embed.add_field(
                 name="Summary",
                 value=f"• **{len(db_users)}** users with Matcherino usernames in database\n"
-                      f"• **{len(api_members)}** team members from API\n"
-                      f"• **{len(matched_users)}** users with matching usernames\n"
-                      f"• **{len(unmatched_users)}** users with non-matching usernames",
+                      f"• **{len(participants)}** participants from API\n"
+                      f"• **{len(exact_matches)}** exact matches (with tag)\n"
+                      f"• **{len(name_only_matches)}** name-only matches (without tag)\n"
+                      f"• **{len(ambiguous_matches)}** ambiguous matches\n"
+                      f"• **{len(unmatched_participants)}** unmatched participants\n"
+                      f"• **{len(unmatched_db_users)}** unmatched database users",
                 inline=False
             )
             
             # Add matched users (limited to avoid embed limits)
             if matched_users:
                 matched_text = "\n".join([
-                    f"• Discord: **{u['username']}** → Matcherino: `{u['matcherino_username']}`" 
-                    for u in matched_users[:10]
+                    f"• Discord: **{m['discord_username']}** → Matcherino: `{m['participant']}`" 
+                    for m in (exact_matches + name_only_matches)[:10]
                 ])
                 if len(matched_users) > 10:
                     matched_text += f"\n... and {len(matched_users) - 10} more"
@@ -243,28 +246,28 @@ class TeamsCog(commands.Cog):
                 )
                 
             # Add unmatched users (limited to avoid embed limits)
-            if unmatched_users:
+            if unmatched_db_users:
                 unmatched_text = "\n".join([
-                    f"• Discord: **{u['username']}** → Matcherino: `{u['matcherino_username']}`" 
-                    for u in unmatched_users[:10]
+                    f"• Discord: **{u['discord_username']}** → Matcherino: `{u['matcherino_username']}`" 
+                    for u in unmatched_db_users[:10]
                 ])
-                if len(unmatched_users) > 10:
-                    unmatched_text += f"\n... and {len(unmatched_users) - 10} more"
+                if len(unmatched_db_users) > 10:
+                    unmatched_text += f"\n... and {len(unmatched_db_users) - 10} more"
                     
                 embed.add_field(
-                    name=f"Unmatched Users ({len(unmatched_users)})",
+                    name=f"Unmatched Users ({len(unmatched_db_users)})",
                     value=unmatched_text,
                     inline=False
                 )
                 
-            # Add API member names (limited to avoid embed limits)
-            if api_members:
-                api_text = "\n".join([f"• `{member}`" for member in list(api_members)[:15]])
-                if len(api_members) > 15:
-                    api_text += f"\n... and {len(api_members) - 15} more"
+            # Add API participant names (limited to avoid embed limits)
+            if unmatched_participants:
+                api_text = "\n".join([f"• `{p['name']}`" for p in unmatched_participants[:15]])
+                if len(unmatched_participants) > 15:
+                    api_text += f"\n... and {len(unmatched_participants) - 15} more"
                     
                 embed.add_field(
-                    name=f"API Member Names ({len(api_members)})",
+                    name=f"Unmatched Participants ({len(unmatched_participants)})",
                     value=api_text,
                     inline=False
                 )
