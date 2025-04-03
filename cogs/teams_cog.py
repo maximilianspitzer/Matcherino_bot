@@ -452,6 +452,105 @@ class TeamsCog(commands.Cog):
             logger.error(f"Error in create-team-voice command: {e}")
             await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
 
+    @app_commands.command(name="update-voice-perms", description="Update permissions for all team voice channels")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.cooldown(rate=1, per=300.0)  # Can only run once every 5 minutes
+    async def update_voice_permissions(self, interaction: discord.Interaction):
+        """Admin command to update permissions for all team voice channels."""
+        await interaction.response.defer(ephemeral=True)
+        
+        try:
+            guild = interaction.guild
+            base_category = guild.get_channel(self.voice_category_id)
+            
+            if not base_category:
+                await interaction.followup.send(f"Could not find the base category with ID {self.voice_category_id}", ephemeral=True)
+                return
+
+            # Get all active teams
+            teams = await self.bot.db.get_matcherino_teams(active_only=True)
+            if not teams:
+                await interaction.followup.send("No active teams found.", ephemeral=True)
+                return
+
+            # Get all team voice categories (base category and any numbered ones)
+            categories = [cat for cat in guild.categories 
+                        if cat.id == self.voice_category_id or
+                        cat.name.startswith("Team Channels #")]
+
+            channels_updated = 0
+            channels_missing = 0
+            
+            for team in teams:
+                team_name = team['team_name']
+                channel_name = f"🎮 {team_name}"
+                
+                # Find team's voice channel across all team categories
+                team_channel = None
+                for category in categories:
+                    team_channel = discord.utils.get(category.voice_channels, name=channel_name)
+                    if team_channel:
+                        break
+
+                if not team_channel:
+                    channels_missing += 1
+                    continue
+
+                # Get team members
+                team_members = [member for member in team['members'] if member.get('discord_user_id')]
+                
+                # Create new overwrites
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                    guild.me: discord.PermissionOverwrite(view_channel=True, manage_channels=True)
+                }
+
+                # Add overwrites for current team members
+                discord_members = []
+                for member in team_members:
+                    discord_id = member['discord_user_id']
+                    discord_member = guild.get_member(discord_id)
+                    if discord_member:
+                        discord_members.append(discord_member)
+                        overwrites[discord_member] = discord.PermissionOverwrite(view_channel=True, connect=True, speak=True)
+
+                try:
+                    # Add delay between operations to avoid rate limits
+                    await asyncio.sleep(2)
+
+                    # Update channel overwrites
+                    await team_channel.edit(overwrites=overwrites)
+                    
+                    # Send notification about updated permissions
+                    if discord_members:
+                        mentions = " ".join(member.mention for member in discord_members)
+                        await team_channel.send(
+                            f"🔄 Channel permissions have been updated! The following members now have access: {mentions}"
+                        )
+                    
+                    channels_updated += 1
+
+                    # Take a break every 25 channels to avoid rate limits
+                    if channels_updated % 25 == 0:
+                        await asyncio.sleep(5)
+
+                except Exception as e:
+                    logger.error(f"Error updating permissions for team {team_name}: {e}")
+                    if "rate limited" in str(e).lower():
+                        await asyncio.sleep(10)
+                    continue
+
+            # Send summary message
+            summary = f"Updated permissions for {channels_updated} voice channels."
+            if channels_missing > 0:
+                summary += f"\n{channels_missing} teams did not have voice channels."
+            
+            await interaction.followup.send(summary, ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"Error in update-voice-permissions command: {e}")
+            await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         """Handle errors from application commands in this cog."""
         if isinstance(error, app_commands.CommandOnCooldown):
