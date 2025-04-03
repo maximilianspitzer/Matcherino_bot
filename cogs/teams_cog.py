@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import logging
 import datetime
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +331,7 @@ class TeamsCog(commands.Cog):
 
     @app_commands.command(name="create-team-voice", description="Create private voice channels for all teams")
     @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.cooldown(rate=1, per=300.0)  # Can only run once every 5 minutes
     async def create_team_voice_channels(self, interaction: discord.Interaction):
         """Admin command to create private voice channels for all teams."""
         await interaction.response.defer(ephemeral=True)
@@ -377,11 +379,19 @@ class TeamsCog(commands.Cog):
                 # Create the voice channel
                 channel_name = f"🎮 {team['team_name']}"
                 try:
+                    # Add delay between channel creations to avoid rate limits
+                    # Discord rate limit is 30 channel operations per 5 minutes per guild
+                    await asyncio.sleep(2)  # 2 second delay between channel creations
+                    
                     channel = await guild.create_voice_channel(
                         name=channel_name,
                         category=category,
                         overwrites=overwrites
                     )
+                    
+                    # Add delay between sending messages to avoid rate limits
+                    # Discord rate limit is 5 messages per 5 seconds per channel
+                    await asyncio.sleep(1)  # 1 second delay before sending message
                     
                     # Send a notification message in the voice channel
                     mentions = " ".join(member.mention for member in team_members)
@@ -391,8 +401,16 @@ class TeamsCog(commands.Cog):
                     )
                     
                     channels_created += 1
+                    
+                    # If we've created 25 channels, take a longer break to avoid hitting guild-wide rate limits
+                    if channels_created % 25 == 0:
+                        await asyncio.sleep(5)  # 5 second break every 25 channels
+                        
                 except Exception as e:
                     logger.error(f"Error creating voice channel for team {team['team_name']}: {e}")
+                    # If we hit a rate limit, take a longer break
+                    if "rate limited" in str(e).lower():
+                        await asyncio.sleep(10)  # 10 second break if rate limited
                     continue
 
             await interaction.followup.send(
@@ -403,6 +421,16 @@ class TeamsCog(commands.Cog):
         except Exception as e:
             logger.error(f"Error in create-team-voice command: {e}")
             await interaction.followup.send(f"An error occurred: {str(e)}", ephemeral=True)
+
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        """Handle errors from application commands in this cog."""
+        if isinstance(error, app_commands.CommandOnCooldown):
+            minutes, seconds = divmod(error.retry_after, 60)
+            await interaction.response.send_message(
+                f"This command is on cooldown. Please try again in {int(minutes)} minutes and {int(seconds)} seconds.",
+                ephemeral=True
+            )
+            return
 
 async def setup(bot):
     await bot.add_cog(TeamsCog(bot))
